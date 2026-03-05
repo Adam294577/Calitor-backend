@@ -13,3 +13,4 @@ dev/
 # ruby schema
 # /models/schema.rb
 config
+.env
