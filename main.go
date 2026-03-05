@@ -62,15 +62,15 @@ func init() {
 
 // initConfig 初始化配置
 func initConfig() {
-	viper.SetConfigFile(config)
 	// 設置環境變數替換規則：將配置路徑中的點號替換為下劃線
 	// 例如 Redis.Host 可以通過 REDIS_HOST 環境變數覆蓋
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
+
+	viper.SetConfigFile(config)
 	if err := viper.ReadInConfig(); err != nil {
-		// 獲取當前工作目錄以便調試
-		wd, _ := os.Getwd()
-		panic(fmt.Sprintf("無法讀取配置文件: %s\n當前工作目錄: %s\n錯誤: %v", config, wd, err))
+		// 找不到設定檔時僅靠環境變數運作（適用於容器部署）
+		fmt.Printf("⚠ 未載入設定檔（%s），將完全使用環境變數\n", config)
 	}
 }
 

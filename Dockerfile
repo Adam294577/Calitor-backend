@@ -23,9 +23,6 @@ WORKDIR /app
 # 從構建階段複製二進制文件
 COPY --from=builder /build/main .
 
-# 複製配置文件目錄（重要！）
-COPY --from=builder /build/config ./config
-
 # 暴露端口
 EXPOSE 8002
 
