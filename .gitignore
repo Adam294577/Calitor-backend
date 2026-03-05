@@ -1,0 +1,15 @@
+# AI Editor
+.cursor
+.specify
+specs
+# 執行檔
+landtop.exe
+# logs
+/storage
+# windows local development 臨時檔案
+tmp/
+build-errors.log
+dev/
+# ruby schema
+# /models/schema.rb
+config
