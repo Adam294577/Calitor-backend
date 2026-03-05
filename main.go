@@ -9,9 +9,11 @@ import (
 	"os/signal"
 	"project/cron"
 	"project/middlewares"
+	"project/models"
 	"project/routes"
 	"project/services/log"
 	"project/services/redis"
+	"project/services/storage"
 	response "project/services/responses"
 	"runtime"
 	"strings"
@@ -88,7 +90,12 @@ func App(HttpServer *gin.Engine) {
 	numCPUs := runtime.NumCPU()
 	log.Info("CPU cores: %d", numCPUs)
 
-	// 初始化並檢查 Redis 連接（在啟動其他服務前）
+	// 初始化並檢查 PostgreSQL 連接
+	dbTest := models.PostgresNew()
+	fmt.Println("✓ PostgreSQL 資料庫連線成功")
+	dbTest.Close()
+
+	// 初始化並檢查 Redis 連接
 	redisClient := redis.NewRedisClient()
 	if redisClient.IsAvailable() {
 		fmt.Println("✓ Redis 緩存功能已啟用")
@@ -96,6 +103,14 @@ func App(HttpServer *gin.Engine) {
 		fmt.Println("⚠ Redis 緩存功能未啟用，將使用優雅降級模式（直接查詢資料庫）")
 	}
 	redisClient.Close() // 關閉測試連接，後續使用時會重新創建
+
+	// 初始化並檢查 MinIO 連接
+	minioClient := storage.NewClient()
+	if minioClient.IsAvailable() {
+		fmt.Println("✓ MinIO 檔案儲存功能已啟用")
+	} else {
+		fmt.Println("⚠ MinIO 檔案儲存功能未啟用")
+	}
 
 	// 啟動Gin服務
 	HttpServer = gin.Default()
