@@ -165,6 +165,22 @@ func (db *DBManager) NewPositionIndex(model interface{}) (int64, error) {
 	return *maxPosition + 1, nil
 }
 
+// AllModels 回傳所有需要遷移的 Model 列表
+// 新增 Model 時在此註冊即可
+func AllModels() []interface{} {
+	return []interface{}{
+		&Role{},
+		&Permission{},
+		&RolePermission{},
+		&Admin{},
+	}
+}
+
+// MigrateAll 自動遷移所有資料表
+func MigrateAll(db *DBManager) error {
+	return db.GetWrite().AutoMigrate(AllModels()...)
+}
+
 // SelectAllModelFields 回傳指定模型所有可更新欄位（排除 id、created_at）
 // 這裡透過 DBManager 直接使用內部的 gorm.DB，不需要外部再傳 db 進來
 func (db *DBManager) SelectAllModelFields(model interface{}) []string {

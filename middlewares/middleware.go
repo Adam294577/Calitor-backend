@@ -58,10 +58,9 @@ func Auth() gin.HandlerFunc {
 		// 是否到期
 
 		if claims, ok := token.Claims.(jwt.MapClaims); ok {
-			ctx.Set("UserId", claims["UserId"])
-			ctx.Set("EnterpriseId", claims["EnterpriseId"])
-			ctx.Set("ShopId", claims["ShopId"])
-			ctx.Set("DeviceToken", claims["DeviceToken"])
+			ctx.Set("AdminId", claims["AdminId"])
+			ctx.Set("Account", claims["Account"])
+			ctx.Set("RoleId", claims["RoleId"])
 		}
 		ctx.Next()
 	}
@@ -119,8 +118,11 @@ func Logger() gin.HandlerFunc {
 		}
 		inf, _ := net.Interfaces()
 
-		// 若為修改性請求（POST / PUT），額外寫一份應用程式層 INFO log，重點記錄「請求」內容
-		if reqMethod == http.MethodPost || reqMethod == http.MethodPut {
+		// 終端即時 log
+		fmt.Printf("[API] %3d | %13v | %s | %s\n", statusCode, latencyTime, reqMethod, reqUri)
+
+		// 若為修改性請求（POST / PUT / PATCH），額外寫一份應用程式層 INFO log，重點記錄「請求」內容
+		if reqMethod == http.MethodPost || reqMethod == http.MethodPut || reqMethod == http.MethodPatch {
 			log.Info(
 				"API Write Request | %s %s | ip=%s | statusCode=%d | body=%s",
 				reqMethod,
