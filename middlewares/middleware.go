@@ -30,6 +30,38 @@ func Middleware() gin.HandlerFunc {
 	}
 }
 
+// RequirePermission 檢查使用者是否擁有指定的任一權限
+func RequirePermission(keys ...string) gin.HandlerFunc {
+	return func(ctx *gin.Context) {
+		resp := response.New(ctx)
+		perms, exists := ctx.Get("Permissions")
+		if !exists {
+			resp.Fail(http.StatusForbidden, "無權限").Send()
+			ctx.Abort()
+			return
+		}
+
+		permSlice, ok := perms.([]interface{})
+		if !ok {
+			resp.Fail(http.StatusForbidden, "無權限").Send()
+			ctx.Abort()
+			return
+		}
+
+		for _, key := range keys {
+			for _, p := range permSlice {
+				if str, ok := p.(string); ok && str == key {
+					ctx.Next()
+					return
+				}
+			}
+		}
+
+		resp.Fail(http.StatusForbidden, "無權限執行此操作").Send()
+		ctx.Abort()
+	}
+}
+
 func Auth() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		resp := response.New(ctx)
@@ -61,6 +93,9 @@ func Auth() gin.HandlerFunc {
 			ctx.Set("AdminId", claims["AdminId"])
 			ctx.Set("Account", claims["Account"])
 			ctx.Set("RoleId", claims["RoleId"])
+			if perms, exists := claims["Permissions"]; exists {
+				ctx.Set("Permissions", perms)
+			}
 		}
 		ctx.Next()
 	}

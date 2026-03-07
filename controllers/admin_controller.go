@@ -52,11 +52,12 @@ func Login(c *gin.Context) {
 	// 查詢權限
 	permissions := getAdminPermissions(db, &admin)
 
-	// 產生 JWT token
+	// 產生 JWT token（含權限）
 	token, err := library.GenerateAdminToken(library.AdminTokenClaims{
-		AdminId: admin.ID,
-		Account: admin.Account,
-		RoleId:  admin.RoleId,
+		AdminId:     admin.ID,
+		Account:     admin.Account,
+		RoleId:      admin.RoleId,
+		Permissions: permissions,
 	})
 	if err != nil {
 		resp.Panic(err).Send()
@@ -64,9 +65,8 @@ func Login(c *gin.Context) {
 	}
 
 	resp.Success("登入成功").SetData(gin.H{
-		"token":       token,
-		"admin":       admin,
-		"permissions": permissions,
+		"token": token,
+		"admin": admin,
 	}).Send()
 }
 
@@ -88,10 +88,21 @@ func GetMe(c *gin.Context) {
 	var role models.Role
 	db.GetRead().Where("id = ?", admin.RoleId).First(&role)
 
-	// 查詢權限
+	// 查詢權限並產生新 token
 	permissions := getAdminPermissions(db, &admin)
+	token, err := library.GenerateAdminToken(library.AdminTokenClaims{
+		AdminId:     admin.ID,
+		Account:     admin.Account,
+		RoleId:      admin.RoleId,
+		Permissions: permissions,
+	})
+	if err != nil {
+		resp.Panic(err).Send()
+		return
+	}
 
 	resp.Success("成功").SetData(gin.H{
+		"token": token,
 		"admin": gin.H{
 			"id":        admin.ID,
 			"account":   admin.Account,
@@ -100,7 +111,6 @@ func GetMe(c *gin.Context) {
 			"is_super":  admin.IsSuper,
 			"role_name": role.Name,
 		},
-		"permissions": permissions,
 	}).Send()
 }
 

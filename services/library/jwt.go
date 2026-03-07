@@ -11,9 +11,10 @@ import (
 
 // AdminTokenClaims JWT token 的 claims 資料
 type AdminTokenClaims struct {
-	AdminId int64
-	Account string
-	RoleId  int64
+	AdminId     int64
+	Account     string
+	RoleId      int64
+	Permissions []string
 }
 
 // GenerateAdminToken 生成管理員 JWT token
@@ -25,11 +26,12 @@ func GenerateAdminToken(claimsData AdminTokenClaims) (string, error) {
 
 	// 建立 claims
 	claims := jwt.MapClaims{
-		"AdminId": claimsData.AdminId,
-		"Account": claimsData.Account,
-		"RoleId":  claimsData.RoleId,
-		"exp":     expirationTime.Unix(),
-		"iat":     time.Now().Unix(),
+		"AdminId":     claimsData.AdminId,
+		"Account":     claimsData.Account,
+		"RoleId":      claimsData.RoleId,
+		"Permissions": claimsData.Permissions,
+		"exp":         expirationTime.Unix(),
+		"iat":         time.Now().Unix(),
 	}
 
 	// 建立 token
@@ -93,10 +95,23 @@ func ParseAdminToken(tokenString string) (*AdminTokenClaims, error) {
 			}
 		}
 
+		// 提取 Permissions
+		var permissions []string
+		if permsVal, exists := claims["Permissions"]; exists && permsVal != nil {
+			if permsArr, ok := permsVal.([]interface{}); ok {
+				for _, v := range permsArr {
+					if s, ok := v.(string); ok {
+						permissions = append(permissions, s)
+					}
+				}
+			}
+		}
+
 		return &AdminTokenClaims{
-			AdminId: adminId,
-			Account: account,
-			RoleId:  roleId,
+			AdminId:     adminId,
+			Account:     account,
+			RoleId:      roleId,
+			Permissions: permissions,
 		}, nil
 	}
 
