@@ -165,20 +165,31 @@ func (db *DBManager) NewPositionIndex(model interface{}) (int64, error) {
 	return *maxPosition + 1, nil
 }
 
-// SelectAllModelFields 回傳指定模型所有可更新欄位（排除 id、created_at）
-// 這裡透過 DBManager 直接使用內部的 gorm.DB，不需要外部再傳 db 進來
-func (db *DBManager) SelectAllModelFields(model interface{}) []string {
-	stmt := &gorm.Statement{DB: db.GetWrite()}
-	_ = stmt.Parse(model)
-
-	fields := make([]string, 0, len(stmt.Schema.Fields))
-	for _, field := range stmt.Schema.Fields {
-		// 排除你不想更新的欄位
-		if field.Name == "id" || field.DBName == "created_at" {
-			continue
-		}
-		fields = append(fields, field.DBName)
+// AllModels 回傳所有需要遷移的 Model 列表
+// 新增 Model 時在此註冊即可
+func AllModels() []interface{} {
+	return []interface{}{
+		&Role{},
+		&Permission{},
+		&RolePermission{},
+		&Admin{},
+		// 輔助資料
+		&Brand{},
+		&Location{},
+		&TWPostalArea{},
+		&MemberTier{},
+		&VendorCategory{},
+		&Currency{},
+		&ProductCategory{},
+		// 主檔
+		&RetailCustomer{},
+		&Vendor{},
+		&Member{},
+		&Product{},
 	}
+}
 
-	return fields
+// MigrateAll 自動遷移所有資料表
+func MigrateAll(db *DBManager) error {
+	return db.GetWrite().AutoMigrate(AllModels()...)
 }

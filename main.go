@@ -93,6 +93,19 @@ func App(HttpServer *gin.Engine) {
 	// 初始化並檢查 PostgreSQL 連接
 	dbTest := models.PostgresNew()
 	fmt.Println("✓ PostgreSQL 資料庫連線成功")
+
+	// 自動遷移資料表
+	if err := models.MigrateAll(dbTest); err != nil {
+		fmt.Printf("⚠ 資料表遷移失敗: %s\n", err.Error())
+	} else {
+		fmt.Println("✓ 資料表遷移完成")
+	}
+
+	// 初始化預設資料
+	models.SeedPermissionsAndRoles(dbTest)
+	models.SeedDefaultAdmin(dbTest)
+	fmt.Println("✓ 預設資料初始化完成")
+
 	dbTest.Close()
 
 	// 初始化並檢查 Redis 連接
@@ -167,6 +180,17 @@ func App(HttpServer *gin.Engine) {
 			// 設定變數
 			ctx.Set("requestID", ctx.Request.Header.Get("X-Request-ID"))
 			ctx.Next()
+		},
+		// 開發環境終端即時 log
+		func(ctx *gin.Context) {
+			start := time.Now()
+			ctx.Next()
+			fmt.Printf("[API] %3d | %13v | %-7s | %s\n",
+				ctx.Writer.Status(),
+				time.Since(start),
+				ctx.Request.Method,
+				ctx.Request.RequestURI,
+			)
 		},
 		func(ctx *gin.Context) {
 			// 排除 Swagger 路径

@@ -27,6 +27,7 @@ type Response struct {
 	statusCode int64
 	errorName  string
 	data       interface{}
+	total      *int64
 }
 
 type ErrorInterface interface {
@@ -114,6 +115,12 @@ func (rsp *Response) SetData(d interface{}) *Response {
 	return rsp
 }
 
+// SetTotal 設定分頁總筆數
+func (rsp *Response) SetTotal(t int64) *Response {
+	rsp.total = &t
+	return rsp
+}
+
 func (rsp *Response) SendString() {
 
 	sCode := http.StatusOK
@@ -152,6 +159,9 @@ func (rsp *Response) Send() {
 			"Status":  rsp.statusCode,
 			"Data":    rsp.data,
 			"Message": rsp.Message,
+		}
+		if rsp.total != nil {
+			resp["Total"] = *rsp.total
 		}
 	} else {
 		resp = gin.H{
