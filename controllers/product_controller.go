@@ -5,6 +5,7 @@ import (
 	"project/models"
 	response "project/services/responses"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -17,17 +18,24 @@ func GetProducts(c *gin.Context) {
 
 	var items []models.Product
 	query := db.GetRead().
-		Preload("Currency").
-		Preload("Vendor").
+		Preload("ProductBrand").
 		Preload("Brand").
-		Preload("Categories").
+		Preload("Size1Group.Options").
+		Preload("Size2Group.Options").
+		Preload("Size3Group.Options").
+		Preload("ProductVendors.Vendor").
+		Preload("CategoryMaps.Category1").
+		Preload("CategoryMaps.Category2").
+		Preload("CategoryMaps.Category3").
+		Preload("CategoryMaps.Category4").
+		Preload("CategoryMaps.Category5").
 		Order("id ASC")
 	query = ApplySearch(query, c.Query("search"), "model_code", "name_spec")
 	if brandId := c.Query("brand_id"); brandId != "" {
 		query = query.Where("brand_id = ?", brandId)
 	}
 	if vendorId := c.Query("vendor_id"); vendorId != "" {
-		query = query.Where("vendor_id = ?", vendorId)
+		query = query.Where("id IN (SELECT product_id FROM product_vendors WHERE vendor_id = ?)", vendorId)
 	}
 	paged, total := Paginate(c, query, &models.Product{})
 	paged.Find(&items)
@@ -40,16 +48,48 @@ func CreateProduct(c *gin.Context) {
 	defer db.Close()
 
 	var req struct {
-		models.Product
-		CategoryIds []int64 `json:"category_ids"`
+		ModelCode      string  `json:"model_code" binding:"required"`
+		Currency       string  `json:"currency"`
+		NameSpec       string  `json:"name_spec"`
+		MSRP           float64 `json:"msrp"`
+		SpecialPrice   float64 `json:"special_price"`
+		OriginalPrice  float64 `json:"original_price"`
+		BillingBrand   string  `json:"billing_brand"`
+		ProductBrandID *int64  `json:"product_brand_id"`
+		TradeMode      int     `json:"trade_mode"`
+		IsVisible      bool    `json:"is_visible"`
+		Season         string  `json:"season"`
+		Remark         string  `json:"remark"`
+		MaterialOuter  string  `json:"material_outer"`
+		MaterialInner  string  `json:"material_inner"`
+		ToeCaptrim     string  `json:"toe_cap_trim"`
+		Lining         string  `json:"lining"`
+		Sock           string  `json:"sock"`
+		Sole           string  `json:"sole"`
+		ImageURL       string  `json:"image_url"`
+		Size1GroupID   *int64  `json:"size1_group_id"`
+		Size2GroupID   *int64  `json:"size2_group_id"`
+		Size3GroupID   *int64  `json:"size3_group_id"`
+		CategoryMaps   []struct {
+			CategoryType int    `json:"category_type"`
+			Category1ID  *int64 `json:"category1_id"`
+			Category2ID  *int64 `json:"category2_id"`
+			Category3ID  *int64 `json:"category3_id"`
+			Category4ID  *int64 `json:"category4_id"`
+			Category5ID  *int64 `json:"category5_id"`
+		} `json:"category_maps"`
+		ProductVendors []struct {
+			VendorID          int64   `json:"vendor_id"`
+			CostDiscount      float64 `json:"cost_discount"`
+			CostStart         float64 `json:"cost_start"`
+			CostLast          float64 `json:"cost_last"`
+			Wholesale         float64 `json:"wholesale"`
+			WholesaleDiscount float64 `json:"wholesale_discount"`
+			IsPrimary         bool    `json:"is_primary"`
+		} `json:"product_vendors"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
-		return
-	}
-
-	if req.ModelCode == "" {
-		resp.Fail(http.StatusBadRequest, "型號為必填").Send()
 		return
 	}
 
@@ -60,17 +100,65 @@ func CreateProduct(c *gin.Context) {
 		return
 	}
 
-	req.Product.ID = 0
-	req.Product.Categories = nil
+	now := time.Now()
+	product := models.Product{
+		ModelCode:      req.ModelCode,
+		Currency:       req.Currency,
+		NameSpec:       req.NameSpec,
+		MSRP:           req.MSRP,
+		SpecialPrice:   req.SpecialPrice,
+		OriginalPrice:  req.OriginalPrice,
+		BillingBrand:   req.BillingBrand,
+		ProductBrandId: req.ProductBrandID,
+		TradeMode:      req.TradeMode,
+		IsVisible:      req.IsVisible,
+		Season:         req.Season,
+		Remark:         req.Remark,
+		MaterialOuter:  req.MaterialOuter,
+		MaterialInner:  req.MaterialInner,
+		ToeCapTrim:     req.ToeCaptrim,
+		Lining:         req.Lining,
+		Sock:           req.Sock,
+		Sole:           req.Sole,
+		ImageURL:       req.ImageURL,
+		Size1GroupID:   req.Size1GroupID,
+		Size2GroupID:   req.Size2GroupID,
+		Size3GroupID:   req.Size3GroupID,
+		CreatedOn:      &now,
+	}
 
 	err := db.GetWrite().Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(&req.Product).Error; err != nil {
+		if err := tx.Create(&product).Error; err != nil {
 			return err
 		}
-		if len(req.CategoryIds) > 0 {
-			var categories []models.ProductCategory
-			tx.Where("id IN ?", req.CategoryIds).Find(&categories)
-			if err := tx.Model(&req.Product).Association("Categories").Replace(categories); err != nil {
+		// 建立 CategoryMaps
+		for _, cm := range req.CategoryMaps {
+			item := models.ProductCategoryMap{
+				ProductID:    product.ID,
+				CategoryType: cm.CategoryType,
+				Category1ID:  cm.Category1ID,
+				Category2ID:  cm.Category2ID,
+				Category3ID:  cm.Category3ID,
+				Category4ID:  cm.Category4ID,
+				Category5ID:  cm.Category5ID,
+			}
+			if err := tx.Create(&item).Error; err != nil {
+				return err
+			}
+		}
+		// 建立 ProductVendors
+		for _, pv := range req.ProductVendors {
+			item := models.ProductVendor{
+				ProductID:         product.ID,
+				VendorID:          pv.VendorID,
+				CostDiscount:      pv.CostDiscount,
+				CostStart:         pv.CostStart,
+				CostLast:          pv.CostLast,
+				Wholesale:         pv.Wholesale,
+				WholesaleDiscount: pv.WholesaleDiscount,
+				IsPrimary:         pv.IsPrimary,
+			}
+			if err := tx.Create(&item).Error; err != nil {
 				return err
 			}
 		}
@@ -81,7 +169,7 @@ func CreateProduct(c *gin.Context) {
 		return
 	}
 
-	resp.Success("新增成功").SetData(req.Product).Send()
+	resp.Success("新增成功").SetData(product).Send()
 }
 
 func UpdateProduct(c *gin.Context) {
@@ -117,29 +205,30 @@ func UpdateProduct(c *gin.Context) {
 		}
 	}
 
-	// 取出 category_ids
-	var categoryIds []int64
-	hasCategoryIds := false
-	if raw, ok := rawReq["category_ids"]; ok {
-		hasCategoryIds = true
+	// 取出 category_maps
+	var categoryMaps []interface{}
+	hasCategoryMaps := false
+	if raw, ok := rawReq["category_maps"]; ok {
+		hasCategoryMaps = true
 		if arr, ok := raw.([]interface{}); ok {
-			for _, v := range arr {
-				if f, ok := v.(float64); ok {
-					categoryIds = append(categoryIds, int64(f))
-				}
-			}
+			categoryMaps = arr
+		}
+	}
+
+	// 取出 product_vendors
+	var productVendors []interface{}
+	hasProductVendors := false
+	if raw, ok := rawReq["product_vendors"]; ok {
+		hasProductVendors = true
+		if arr, ok := raw.([]interface{}); ok {
+			productVendors = arr
 		}
 	}
 
 	// 移除不可更新的欄位
-	delete(rawReq, "id")
-	delete(rawReq, "created_at")
-	delete(rawReq, "deleted_at")
-	delete(rawReq, "currency")
-	delete(rawReq, "vendor")
-	delete(rawReq, "brand")
-	delete(rawReq, "categories")
-	delete(rawReq, "category_ids")
+	for _, key := range []string{"id", "created_at", "deleted_at", "product_brand", "brand", "category_maps", "product_vendors", "size1_group", "size2_group", "size3_group"} {
+		delete(rawReq, key)
+	}
 
 	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
 		if len(rawReq) > 0 {
@@ -147,13 +236,76 @@ func UpdateProduct(c *gin.Context) {
 				return err
 			}
 		}
-		if hasCategoryIds {
-			var categories []models.ProductCategory
-			if len(categoryIds) > 0 {
-				tx.Where("id IN ?", categoryIds).Find(&categories)
+		// 重建 CategoryMaps
+		if hasCategoryMaps {
+			tx.Where("product_id = ?", id).Delete(&models.ProductCategoryMap{})
+			for _, raw := range categoryMaps {
+				m, ok := raw.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				cm := models.ProductCategoryMap{ProductID: id}
+				if v, ok := m["category_type"].(float64); ok {
+					cm.CategoryType = int(v)
+				}
+				if v, ok := m["category1_id"].(float64); ok {
+					vid := int64(v)
+					cm.Category1ID = &vid
+				}
+				if v, ok := m["category2_id"].(float64); ok {
+					vid := int64(v)
+					cm.Category2ID = &vid
+				}
+				if v, ok := m["category3_id"].(float64); ok {
+					vid := int64(v)
+					cm.Category3ID = &vid
+				}
+				if v, ok := m["category4_id"].(float64); ok {
+					vid := int64(v)
+					cm.Category4ID = &vid
+				}
+				if v, ok := m["category5_id"].(float64); ok {
+					vid := int64(v)
+					cm.Category5ID = &vid
+				}
+				if err := tx.Create(&cm).Error; err != nil {
+					return err
+				}
 			}
-			if err := tx.Model(&existing).Association("Categories").Replace(categories); err != nil {
-				return err
+		}
+		// 重建 ProductVendors
+		if hasProductVendors {
+			tx.Where("product_id = ?", id).Delete(&models.ProductVendor{})
+			for _, raw := range productVendors {
+				m, ok := raw.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				pv := models.ProductVendor{ProductID: id}
+				if v, ok := m["vendor_id"].(float64); ok {
+					pv.VendorID = int64(v)
+				}
+				if v, ok := m["cost_discount"].(float64); ok {
+					pv.CostDiscount = v
+				}
+				if v, ok := m["cost_start"].(float64); ok {
+					pv.CostStart = v
+				}
+				if v, ok := m["cost_last"].(float64); ok {
+					pv.CostLast = v
+				}
+				if v, ok := m["wholesale"].(float64); ok {
+					pv.Wholesale = v
+				}
+				if v, ok := m["wholesale_discount"].(float64); ok {
+					pv.WholesaleDiscount = v
+				}
+				if v, ok := m["is_primary"].(bool); ok {
+					pv.IsPrimary = v
+				}
+				if err := tx.Create(&pv).Error; err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -177,12 +329,15 @@ func DeleteProduct(c *gin.Context) {
 	db := models.PostgresNew()
 	defer db.Close()
 
-	// 清除 M2M 關聯
-	var product models.Product
-	if err := db.GetRead().Where("id = ?", id).First(&product).Error; err == nil {
-		db.GetWrite().Model(&product).Association("Categories").Clear()
+	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
+		tx.Where("product_id = ?", id).Delete(&models.ProductCategoryMap{})
+		tx.Where("product_id = ?", id).Delete(&models.ProductVendor{})
+		return tx.Delete(&models.Product{}, id).Error
+	})
+	if err != nil {
+		resp.Panic(err).Send()
+		return
 	}
 
-	db.GetWrite().Delete(&models.Product{}, id)
 	resp.Success("刪除成功").Send()
 }

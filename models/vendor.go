@@ -29,7 +29,7 @@ type Vendor struct {
 	InvoiceAddress string          `gorm:"type:varchar(500)" json:"invoice_address"`
 	CompanyAddress string          `gorm:"type:varchar(500)" json:"company_address"`
 	Email          string          `gorm:"type:varchar(200)" json:"email"`
-	Discount       int             `gorm:"default:100" json:"discount"`
+	Discount       float64         `gorm:"type:numeric(5,2);default:100" json:"discount"`
 	Note           string          `gorm:"type:text" json:"note"`
 	PaymentTerm    int             `gorm:"default:0" json:"payment_term"`
 	TaxRate        float64         `gorm:"type:decimal(5,2);default:5" json:"tax_rate"`

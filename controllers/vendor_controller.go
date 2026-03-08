@@ -5,6 +5,7 @@ import (
 	"project/models"
 	response "project/services/responses"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -49,6 +50,7 @@ func CreateVendor(c *gin.Context) {
 	}
 
 	item.ID = 0
+	item.CreatedDate = time.Now().Format("20060102")
 	if err := db.GetWrite().Create(&item).Error; err != nil {
 		resp.Panic(err).Send()
 		return
@@ -126,9 +128,9 @@ func DeleteVendor(c *gin.Context) {
 	db := models.PostgresNew()
 	defer db.Close()
 
-	var productCount int64
-	db.GetRead().Model(&models.Product{}).Where("vendor_id = ?", id).Count(&productCount)
-	if productCount > 0 {
+	var pvCount int64
+	db.GetRead().Model(&models.ProductVendor{}).Where("vendor_id = ?", id).Count(&pvCount)
+	if pvCount > 0 {
 		resp.Fail(http.StatusBadRequest, "此廠商仍有商品使用中，無法刪除").Send()
 		return
 	}

@@ -126,51 +126,83 @@ func SeedMasterDataPermissions(db *DBManager) {
 
 	// 輔助資料 - 第二層
 	auxMid := []Permission{
-		{Key: "brands", Name: "品牌管理", Sort: 1, ParentId: &auxiliaryData.ID},
+		{Key: "product-brands", Name: "品牌管理", Sort: 0, ParentId: &auxiliaryData.ID},
+		{Key: "brands", Name: "對帳品牌", Sort: 1, ParentId: &auxiliaryData.ID},
 		{Key: "locations", Name: "地理位置", Sort: 2, ParentId: &auxiliaryData.ID},
 		{Key: "postal-areas", Name: "郵遞區號", Sort: 3, ParentId: &auxiliaryData.ID},
 		{Key: "member-tiers", Name: "會員卡別", Sort: 4, ParentId: &auxiliaryData.ID},
 		{Key: "product-categories", Name: "商品類別", Sort: 5, ParentId: &auxiliaryData.ID},
 		{Key: "vendor-categories", Name: "廠商類別", Sort: 6, ParentId: &auxiliaryData.ID},
 		{Key: "currencies", Name: "幣別管理", Sort: 7, ParentId: &auxiliaryData.ID},
+		{Key: "size-groups", Name: "尺碼群組", Sort: 8, ParentId: &auxiliaryData.ID},
+		{Key: "material-options", Name: "材質選項", Sort: 9, ParentId: &auxiliaryData.ID},
+		{Key: "stock-locations", Name: "庫點管理", Sort: 10, ParentId: &auxiliaryData.ID},
 	}
 	for i, p := range auxMid {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&auxMid[i])
-		db.GetWrite().Model(&Permission{}).Where("key = ? AND parent_id IS NULL", p.Key).Update("parent_id", p.ParentId)
+		db.GetWrite().Model(&Permission{}).Where("key = ?", p.Key).Updates(map[string]interface{}{"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId})
 	}
 
 	// 輔助資料 - 第三層
 	auxLeaf := []Permission{
-		{Key: "brands.view", Name: "檢視品牌", Sort: 1, ParentId: &auxMid[0].ID},
-		{Key: "brands.create", Name: "新增品牌", Sort: 2, ParentId: &auxMid[0].ID},
-		{Key: "brands.edit", Name: "編輯品牌", Sort: 3, ParentId: &auxMid[0].ID},
-		{Key: "brands.delete", Name: "刪除品牌", Sort: 4, ParentId: &auxMid[0].ID},
-		{Key: "locations.view", Name: "檢視地理位置", Sort: 1, ParentId: &auxMid[1].ID},
-		{Key: "locations.create", Name: "新增地理位置", Sort: 2, ParentId: &auxMid[1].ID},
-		{Key: "locations.edit", Name: "編輯地理位置", Sort: 3, ParentId: &auxMid[1].ID},
-		{Key: "locations.delete", Name: "刪除地理位置", Sort: 4, ParentId: &auxMid[1].ID},
-		{Key: "postal-areas.view", Name: "檢視郵遞區號", Sort: 1, ParentId: &auxMid[2].ID},
-		{Key: "postal-areas.create", Name: "新增郵遞區號", Sort: 2, ParentId: &auxMid[2].ID},
-		{Key: "postal-areas.edit", Name: "編輯郵遞區號", Sort: 3, ParentId: &auxMid[2].ID},
-		{Key: "postal-areas.delete", Name: "刪除郵遞區號", Sort: 4, ParentId: &auxMid[2].ID},
-		{Key: "member-tiers.view", Name: "檢視會員卡別", Sort: 1, ParentId: &auxMid[3].ID},
-		{Key: "member-tiers.create", Name: "新增會員卡別", Sort: 2, ParentId: &auxMid[3].ID},
-		{Key: "member-tiers.edit", Name: "編輯會員卡別", Sort: 3, ParentId: &auxMid[3].ID},
-		{Key: "member-tiers.delete", Name: "刪除會員卡別", Sort: 4, ParentId: &auxMid[3].ID},
-		{Key: "product-categories.view", Name: "檢視商品類別", Sort: 1, ParentId: &auxMid[4].ID},
-		{Key: "product-categories.create", Name: "新增商品類別", Sort: 2, ParentId: &auxMid[4].ID},
-		{Key: "product-categories.edit", Name: "編輯商品類別", Sort: 3, ParentId: &auxMid[4].ID},
-		{Key: "product-categories.delete", Name: "刪除商品類別", Sort: 4, ParentId: &auxMid[4].ID},
-		{Key: "vendor-categories.view", Name: "檢視廠商類別", Sort: 1, ParentId: &auxMid[5].ID},
-		{Key: "vendor-categories.create", Name: "新增廠商類別", Sort: 2, ParentId: &auxMid[5].ID},
-		{Key: "vendor-categories.edit", Name: "編輯廠商類別", Sort: 3, ParentId: &auxMid[5].ID},
-		{Key: "vendor-categories.delete", Name: "刪除廠商類別", Sort: 4, ParentId: &auxMid[5].ID},
-		{Key: "currencies.view", Name: "檢視幣別", Sort: 1, ParentId: &auxMid[6].ID},
-		{Key: "currencies.create", Name: "新增幣別", Sort: 2, ParentId: &auxMid[6].ID},
-		{Key: "currencies.edit", Name: "編輯幣別", Sort: 3, ParentId: &auxMid[6].ID},
-		{Key: "currencies.delete", Name: "刪除幣別", Sort: 4, ParentId: &auxMid[6].ID},
+		// [0] product-brands 品牌
+		{Key: "product-brands.view", Name: "檢視品牌", Sort: 1, ParentId: &auxMid[0].ID},
+		{Key: "product-brands.create", Name: "新增品牌", Sort: 2, ParentId: &auxMid[0].ID},
+		{Key: "product-brands.edit", Name: "編輯品牌", Sort: 3, ParentId: &auxMid[0].ID},
+		{Key: "product-brands.delete", Name: "刪除品牌", Sort: 4, ParentId: &auxMid[0].ID},
+		// [1] brands 對帳品牌
+		{Key: "brands.view", Name: "檢視對帳品牌", Sort: 1, ParentId: &auxMid[1].ID},
+		{Key: "brands.create", Name: "新增對帳品牌", Sort: 2, ParentId: &auxMid[1].ID},
+		{Key: "brands.edit", Name: "編輯對帳品牌", Sort: 3, ParentId: &auxMid[1].ID},
+		{Key: "brands.delete", Name: "刪除對帳品牌", Sort: 4, ParentId: &auxMid[1].ID},
+		// [2] locations
+		{Key: "locations.view", Name: "檢視地理位置", Sort: 1, ParentId: &auxMid[2].ID},
+		{Key: "locations.create", Name: "新增地理位置", Sort: 2, ParentId: &auxMid[2].ID},
+		{Key: "locations.edit", Name: "編輯地理位置", Sort: 3, ParentId: &auxMid[2].ID},
+		{Key: "locations.delete", Name: "刪除地理位置", Sort: 4, ParentId: &auxMid[2].ID},
+		// [3] postal-areas
+		{Key: "postal-areas.view", Name: "檢視郵遞區號", Sort: 1, ParentId: &auxMid[3].ID},
+		{Key: "postal-areas.create", Name: "新增郵遞區號", Sort: 2, ParentId: &auxMid[3].ID},
+		{Key: "postal-areas.edit", Name: "編輯郵遞區號", Sort: 3, ParentId: &auxMid[3].ID},
+		{Key: "postal-areas.delete", Name: "刪除郵遞區號", Sort: 4, ParentId: &auxMid[3].ID},
+		// [4] member-tiers
+		{Key: "member-tiers.view", Name: "檢視會員卡別", Sort: 1, ParentId: &auxMid[4].ID},
+		{Key: "member-tiers.create", Name: "新增會員卡別", Sort: 2, ParentId: &auxMid[4].ID},
+		{Key: "member-tiers.edit", Name: "編輯會員卡別", Sort: 3, ParentId: &auxMid[4].ID},
+		{Key: "member-tiers.delete", Name: "刪除會員卡別", Sort: 4, ParentId: &auxMid[4].ID},
+		// [5] product-categories
+		{Key: "product-categories.view", Name: "檢視商品類別", Sort: 1, ParentId: &auxMid[5].ID},
+		{Key: "product-categories.create", Name: "新增商品類別", Sort: 2, ParentId: &auxMid[5].ID},
+		{Key: "product-categories.edit", Name: "編輯商品類別", Sort: 3, ParentId: &auxMid[5].ID},
+		{Key: "product-categories.delete", Name: "刪除商品類別", Sort: 4, ParentId: &auxMid[5].ID},
+		// [6] vendor-categories
+		{Key: "vendor-categories.view", Name: "檢視廠商類別", Sort: 1, ParentId: &auxMid[6].ID},
+		{Key: "vendor-categories.create", Name: "新增廠商類別", Sort: 2, ParentId: &auxMid[6].ID},
+		{Key: "vendor-categories.edit", Name: "編輯廠商類別", Sort: 3, ParentId: &auxMid[6].ID},
+		{Key: "vendor-categories.delete", Name: "刪除廠商類別", Sort: 4, ParentId: &auxMid[6].ID},
+		// [7] currencies
+		{Key: "currencies.view", Name: "檢視幣別", Sort: 1, ParentId: &auxMid[7].ID},
+		{Key: "currencies.create", Name: "新增幣別", Sort: 2, ParentId: &auxMid[7].ID},
+		{Key: "currencies.edit", Name: "編輯幣別", Sort: 3, ParentId: &auxMid[7].ID},
+		{Key: "currencies.delete", Name: "刪除幣別", Sort: 4, ParentId: &auxMid[7].ID},
+		// [8] size-groups
+		{Key: "size-groups.view", Name: "檢視尺碼群組", Sort: 1, ParentId: &auxMid[8].ID},
+		{Key: "size-groups.create", Name: "新增尺碼群組", Sort: 2, ParentId: &auxMid[8].ID},
+		{Key: "size-groups.edit", Name: "編輯尺碼群組", Sort: 3, ParentId: &auxMid[8].ID},
+		{Key: "size-groups.delete", Name: "刪除尺碼群組", Sort: 4, ParentId: &auxMid[8].ID},
+		// [9] material-options
+		{Key: "material-options.view", Name: "檢視材質選項", Sort: 1, ParentId: &auxMid[9].ID},
+		{Key: "material-options.create", Name: "新增材質選項", Sort: 2, ParentId: &auxMid[9].ID},
+		{Key: "material-options.edit", Name: "編輯材質選項", Sort: 3, ParentId: &auxMid[9].ID},
+		{Key: "material-options.delete", Name: "刪除材質選項", Sort: 4, ParentId: &auxMid[9].ID},
+		// [10] stock-locations
+		{Key: "stock-locations.view", Name: "檢視庫點", Sort: 1, ParentId: &auxMid[10].ID},
+		{Key: "stock-locations.create", Name: "新增庫點", Sort: 2, ParentId: &auxMid[10].ID},
+		{Key: "stock-locations.edit", Name: "編輯庫點", Sort: 3, ParentId: &auxMid[10].ID},
+		{Key: "stock-locations.delete", Name: "刪除庫點", Sort: 4, ParentId: &auxMid[10].ID},
 	}
 	for _, p := range auxLeaf {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&p)
+		db.GetWrite().Model(&Permission{}).Where("key = ?", p.Key).Updates(map[string]interface{}{"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId})
 	}
 }
