@@ -11,6 +11,9 @@ import (
 )
 
 func GetVendors(c *gin.Context) {
+	if tryListCache(c) {
+		return
+	}
 	resp := response.New(c)
 	db := models.PostgresNew()
 	defer db.Close()
@@ -23,6 +26,7 @@ func GetVendors(c *gin.Context) {
 	}
 	paged, total := Paginate(c, query, &models.Vendor{})
 	paged.Find(&items)
+	setListCache(c, items, total)
 	resp.Success("成功").SetData(items).SetTotal(total).Send()
 }
 
@@ -55,6 +59,7 @@ func CreateVendor(c *gin.Context) {
 		resp.Panic(err).Send()
 		return
 	}
+	invalidateListCache("vendors")
 	resp.Success("新增成功").SetData(item).Send()
 }
 
@@ -114,6 +119,7 @@ func UpdateVendor(c *gin.Context) {
 	}
 
 	db.GetWrite().Model(&existing).Updates(req)
+	invalidateListCache("vendors")
 	resp.Success("更新成功").Send()
 }
 
@@ -136,5 +142,6 @@ func DeleteVendor(c *gin.Context) {
 	}
 
 	db.GetWrite().Delete(&models.Vendor{}, id)
+	invalidateListCache("vendors")
 	resp.Success("刪除成功").Send()
 }

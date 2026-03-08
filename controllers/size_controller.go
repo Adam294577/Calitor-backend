@@ -13,6 +13,9 @@ import (
 // ==================== SizeGroup ====================
 
 func GetSizeGroups(c *gin.Context) {
+	if tryListCache(c) {
+		return
+	}
 	resp := response.New(c)
 	db := models.PostgresNew()
 	defer db.Close()
@@ -24,6 +27,7 @@ func GetSizeGroups(c *gin.Context) {
 	query = ApplySearch(query, c.Query("search"), "code", "name")
 	paged, total := Paginate(c, query, &models.SizeGroup{})
 	paged.Find(&items)
+	setListCache(c, items, total)
 	resp.Success("成功").SetData(items).SetTotal(total).Send()
 }
 
@@ -53,6 +57,7 @@ func CreateSizeGroup(c *gin.Context) {
 		resp.Panic(err).Send()
 		return
 	}
+	invalidateListCache("size-groups")
 	resp.Success("新增成功").SetData(item).Send()
 }
 
@@ -99,6 +104,7 @@ func UpdateSizeGroup(c *gin.Context) {
 		updates["name"] = req.Name
 	}
 	db.GetWrite().Model(&item).Updates(updates)
+	invalidateListCache("size-groups")
 	resp.Success("更新成功").Send()
 }
 
@@ -126,6 +132,7 @@ func DeleteSizeGroup(c *gin.Context) {
 	// 刪除子選項
 	db.GetWrite().Where("size_group_id = ?", id).Delete(&models.SizeOption{})
 	db.GetWrite().Delete(&models.SizeGroup{}, id)
+	invalidateListCache("size-groups")
 	resp.Success("刪除成功").Send()
 }
 
@@ -173,6 +180,7 @@ func CreateSizeOption(c *gin.Context) {
 		resp.Panic(err).Send()
 		return
 	}
+	invalidateListCache("size-groups")
 	resp.Success("新增成功").SetData(item).Send()
 }
 
@@ -214,6 +222,7 @@ func UpdateSizeOption(c *gin.Context) {
 		updates["sort_order"] = *req.SortOrder
 	}
 	db.GetWrite().Model(&item).Updates(updates)
+	invalidateListCache("size-groups")
 	resp.Success("更新成功").Send()
 }
 
@@ -229,5 +238,6 @@ func DeleteSizeOption(c *gin.Context) {
 	defer db.Close()
 
 	db.GetWrite().Delete(&models.SizeOption{}, id)
+	invalidateListCache("size-groups")
 	resp.Success("刪除成功").Send()
 }

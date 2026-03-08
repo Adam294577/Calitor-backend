@@ -20,6 +20,22 @@ type Client struct {
 	available bool // 標記 Redis 是否可用
 }
 
+var globalClient *Client
+
+// InitGlobal 初始化全域 Redis 連線（main 呼叫一次）
+func InitGlobal() *Client {
+	globalClient = NewRedisClient()
+	return globalClient
+}
+
+// Global 取得全域 Redis 客戶端
+func Global() *Client {
+	if globalClient == nil {
+		return &Client{available: false}
+	}
+	return globalClient
+}
+
 // NewRedisClient 創建 Redis 客戶端（優雅降級版本）
 func NewRedisClient() *Client {
 	redisDB := redis.NewClient(&redis.Options{
