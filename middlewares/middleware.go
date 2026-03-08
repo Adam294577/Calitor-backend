@@ -87,15 +87,32 @@ func Auth() gin.HandlerFunc {
 			ctx.Abort()
 			return
 		}
-		// 是否到期
 
-		if claims, ok := token.Claims.(jwt.MapClaims); ok {
-			ctx.Set("AdminId", claims["AdminId"])
-			ctx.Set("Account", claims["Account"])
-			ctx.Set("RoleId", claims["RoleId"])
-			if perms, exists := claims["Permissions"]; exists {
-				ctx.Set("Permissions", perms)
+		claims, ok := token.Claims.(jwt.MapClaims)
+		if !ok {
+			resp.Fail(http.StatusUnauthorized, "無效的 Token").Send()
+			ctx.Abort()
+			return
+		}
+
+		// 明確檢查 Token 是否過期
+		if exp, ok := claims["exp"].(float64); ok {
+			if time.Now().Unix() > int64(exp) {
+				resp.Fail(http.StatusUnauthorized, "Token 已過期，請重新登入").Send()
+				ctx.Abort()
+				return
 			}
+		} else {
+			resp.Fail(http.StatusUnauthorized, "無效的 Token（缺少過期時間）").Send()
+			ctx.Abort()
+			return
+		}
+
+		ctx.Set("AdminId", claims["AdminId"])
+		ctx.Set("Account", claims["Account"])
+		ctx.Set("RoleId", claims["RoleId"])
+		if perms, exists := claims["Permissions"]; exists {
+			ctx.Set("Permissions", perms)
 		}
 		ctx.Next()
 	}
@@ -178,19 +195,35 @@ func GetClientIP() string {
 }
 
 // CORS 處理跨域請求的 middleware
-// 注意：允許所有來源，這在生產環境中不太安全，僅供開發使用
+// 從設定檔讀取 Server.AllowedOrigins（字串陣列），若未設定則預設僅允許 localhost
 func CORS() gin.HandlerFunc {
+	allowed := viper.GetStringSlice("Server.AllowedOrigins")
+	if len(allowed) == 0 {
+		allowed = []string{
+			"http://localhost:5173",
+			"http://localhost:4173",
+			"http://127.0.0.1:5173",
+			"http://127.0.0.1:4173",
+		}
+	}
+	allowedSet := make(map[string]bool, len(allowed))
+	for _, o := range allowed {
+		allowedSet[o] = true
+	}
+
 	return func(ctx *gin.Context) {
 		origin := ctx.GetHeader("Origin")
 
-		// 允許所有來源
-		// 如果有 Origin header，直接使用它（支援 Credentials）
-		// 如果沒有 Origin header，使用 *（但這種情況下不能設置 Credentials）
 		if origin != "" {
-			ctx.Header("Access-Control-Allow-Origin", origin)
-			ctx.Header("Access-Control-Allow-Credentials", "true")
-		} else {
-			ctx.Header("Access-Control-Allow-Origin", "*")
+			// 檢查 origin 是否在允許清單中
+			if allowedSet[origin] {
+				ctx.Header("Access-Control-Allow-Origin", origin)
+				ctx.Header("Access-Control-Allow-Credentials", "true")
+			} else {
+				// 不在允許清單中：不設定 CORS header，瀏覽器會阻擋請求
+				ctx.AbortWithStatus(http.StatusForbidden)
+				return
+			}
 		}
 		ctx.Header("Access-Control-Allow-Headers", "Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, accept, origin, Cache-Control, X-Requested-With")
 		ctx.Header("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
