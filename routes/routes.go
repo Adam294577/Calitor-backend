@@ -19,11 +19,21 @@ func RouterRegister(route *gin.Engine) {
 		resp.Success("成功").Send()
 	})
 
+	// 檔案代理（MinIO proxy，公開存取）
+	route.GET("/api/file/*path", controllers.ServeFile)
+
 	// 開發環境專用路由（僅 config 包含 "dev" 時註冊）
 	if strings.Contains(viper.ConfigFileUsed(), "dev") {
 		dev := route.Group("/api/dev")
 		{
 			dev.POST("/migrate", controllers.Migrate)
+			dev.POST("/seed-postal-areas", controllers.SeedPostalAreas)
+			dev.POST("/seed-product-categories", controllers.SeedProductCategories)
+			dev.POST("/seed-vendors", controllers.SeedVendors)
+			dev.POST("/seed-size-groups", controllers.SeedSizeGroups)
+			dev.POST("/seed-material-options", controllers.SeedMaterialOptions)
+		dev.POST("/cleanup-orphan-images", controllers.CleanupOrphanImages)
+			dev.POST("/reset-super-admin", controllers.ResetSuperAdmin)
 		}
 	}
 
@@ -59,6 +69,12 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.PUT("/roles/:id/permissions", middlewares.RequirePermission("permissions.edit"), controllers.UpdateRolePermissions)
 
 		// 輔助資料 - 品牌
+		adminAuth.GET("/product-brands", middlewares.RequirePermission("product-brands.view"), controllers.GetProductBrands)
+		adminAuth.POST("/product-brands", middlewares.RequirePermission("product-brands.create"), controllers.CreateProductBrand)
+		adminAuth.PUT("/product-brands/:id", middlewares.RequirePermission("product-brands.edit"), controllers.UpdateProductBrand)
+		adminAuth.DELETE("/product-brands/:id", middlewares.RequirePermission("product-brands.delete"), controllers.DeleteProductBrand)
+
+		// 輔助資料 - 對帳品牌
 		adminAuth.GET("/brands", middlewares.RequirePermission("brands.view"), controllers.GetBrands)
 		adminAuth.POST("/brands", middlewares.RequirePermission("brands.create"), controllers.CreateBrand)
 		adminAuth.PUT("/brands/:id", middlewares.RequirePermission("brands.edit"), controllers.UpdateBrand)
@@ -94,11 +110,35 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.PUT("/currencies/:id", middlewares.RequirePermission("currencies.edit"), controllers.UpdateCurrency)
 		adminAuth.DELETE("/currencies/:id", middlewares.RequirePermission("currencies.delete"), controllers.DeleteCurrency)
 
-		// 輔助資料 - 商品類別
-		adminAuth.GET("/product-categories", middlewares.RequirePermission("product-categories.view"), controllers.GetProductCategories)
-		adminAuth.POST("/product-categories", middlewares.RequirePermission("product-categories.create"), controllers.CreateProductCategory)
-		adminAuth.PUT("/product-categories/:id", middlewares.RequirePermission("product-categories.edit"), controllers.UpdateProductCategory)
-		adminAuth.DELETE("/product-categories/:id", middlewares.RequirePermission("product-categories.delete"), controllers.DeleteProductCategory)
+		// 輔助資料 - 商品類別 (1-5)
+		adminAuth.GET("/product-categories/:level", middlewares.RequirePermission("product-categories.view"), controllers.GetProductCategoriesByLevel)
+		adminAuth.POST("/product-categories/:level", middlewares.RequirePermission("product-categories.create"), controllers.CreateProductCategoryByLevel)
+		adminAuth.PUT("/product-categories/:level/:id", middlewares.RequirePermission("product-categories.edit"), controllers.UpdateProductCategoryByLevel)
+		adminAuth.DELETE("/product-categories/:level/:id", middlewares.RequirePermission("product-categories.delete"), controllers.DeleteProductCategoryByLevel)
+
+		// 輔助資料 - 尺碼群組
+		adminAuth.GET("/size-groups", middlewares.RequirePermission("size-groups.view"), controllers.GetSizeGroups)
+		adminAuth.POST("/size-groups", middlewares.RequirePermission("size-groups.create"), controllers.CreateSizeGroup)
+		adminAuth.PUT("/size-groups/:id", middlewares.RequirePermission("size-groups.edit"), controllers.UpdateSizeGroup)
+		adminAuth.DELETE("/size-groups/:id", middlewares.RequirePermission("size-groups.delete"), controllers.DeleteSizeGroup)
+
+		// 輔助資料 - 尺碼選項
+		adminAuth.GET("/size-options", middlewares.RequirePermission("size-groups.view"), controllers.GetSizeOptions)
+		adminAuth.POST("/size-options", middlewares.RequirePermission("size-groups.create"), controllers.CreateSizeOption)
+		adminAuth.PUT("/size-options/:id", middlewares.RequirePermission("size-groups.edit"), controllers.UpdateSizeOption)
+		adminAuth.DELETE("/size-options/:id", middlewares.RequirePermission("size-groups.delete"), controllers.DeleteSizeOption)
+
+		// 輔助資料 - 材質選項
+		adminAuth.GET("/material-options", middlewares.RequirePermission("material-options.view"), controllers.GetMaterialOptions)
+		adminAuth.POST("/material-options", middlewares.RequirePermission("material-options.create"), controllers.CreateMaterialOption)
+		adminAuth.PUT("/material-options/:id", middlewares.RequirePermission("material-options.edit"), controllers.UpdateMaterialOption)
+		adminAuth.DELETE("/material-options/:id", middlewares.RequirePermission("material-options.delete"), controllers.DeleteMaterialOption)
+
+		// 輔助資料 - 庫點
+		adminAuth.GET("/stock-locations", middlewares.RequirePermission("stock-locations.view"), controllers.GetStockLocations)
+		adminAuth.POST("/stock-locations", middlewares.RequirePermission("stock-locations.create"), controllers.CreateStockLocation)
+		adminAuth.PUT("/stock-locations/:id", middlewares.RequirePermission("stock-locations.edit"), controllers.UpdateStockLocation)
+		adminAuth.DELETE("/stock-locations/:id", middlewares.RequirePermission("stock-locations.delete"), controllers.DeleteStockLocation)
 
 		// 主檔 - 客戶
 		adminAuth.GET("/customers", middlewares.RequirePermission("customers.view"), controllers.GetCustomers)
@@ -123,5 +163,10 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.POST("/products", middlewares.RequirePermission("product-mgmt.create"), controllers.CreateProduct)
 		adminAuth.PUT("/products/:id", middlewares.RequirePermission("product-mgmt.edit"), controllers.UpdateProduct)
 		adminAuth.DELETE("/products/:id", middlewares.RequirePermission("product-mgmt.delete"), controllers.DeleteProduct)
+
+		// 圖片上傳
+		adminAuth.POST("/upload/product-image", middlewares.RequirePermission("product-mgmt.create"), controllers.UploadProductImage)
+		adminAuth.DELETE("/upload/product-image", middlewares.RequirePermission("product-mgmt.delete"), controllers.DeleteProductImage)
+
 	}
 }
