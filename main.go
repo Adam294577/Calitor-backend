@@ -104,7 +104,9 @@ func App(HttpServer *gin.Engine) {
 	// 初始化預設資料
 	models.SeedPermissionsAndRoles(dbTest)
 	models.SeedDefaultAdmin(dbTest)
-	// fmt.Println("✓ 預設資料初始化完成")
+
+	// 一次性遷移：將 role_permissions 中的父節點展開為葉子節點
+	// models.MigrateRolePermissionsToLeaf(dbTest)
 
 	dbTest.Close()
 
