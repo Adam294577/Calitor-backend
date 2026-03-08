@@ -392,7 +392,7 @@ func GetPermissions(c *gin.Context) {
 	resp.Success("成功").SetData(permissions).Send()
 }
 
-// getAdminPermissions 取得管理員權限列表（含父子繼承展開）
+// getAdminPermissions 取得管理員權限列表（含向上補齊祖先節點）
 func getAdminPermissions(db *models.DBManager, admin *models.Admin) []string {
 	var permissions []models.Permission
 
@@ -406,26 +406,30 @@ func getAdminPermissions(db *models.DBManager, admin *models.Admin) []string {
 			Find(&permissions)
 	}
 
-	// 收集已有的 permission IDs
+	// 收集已有的 ID
 	idSet := make(map[int64]bool)
 	for _, p := range permissions {
 		idSet[p.ID] = true
 	}
 
-	// 遞迴展開：已有的權限若為父層，自動包含所有後代
-	expandIds := make([]int64, 0, len(permissions))
+	// 向上補齊：找出所有祖先節點，讓 sidebar 群組能正常顯示
+	var parentIds []int64
 	for _, p := range permissions {
-		expandIds = append(expandIds, p.ID)
+		if p.ParentId != nil && !idSet[*p.ParentId] {
+			parentIds = append(parentIds, *p.ParentId)
+		}
 	}
-	for len(expandIds) > 0 {
-		var children []models.Permission
-		db.GetRead().Where("parent_id IN ?", expandIds).Find(&children)
-		expandIds = nil
-		for _, c := range children {
-			if !idSet[c.ID] {
-				permissions = append(permissions, c)
-				idSet[c.ID] = true
-				expandIds = append(expandIds, c.ID)
+	for len(parentIds) > 0 {
+		var parents []models.Permission
+		db.GetRead().Where("id IN ?", parentIds).Find(&parents)
+		parentIds = nil
+		for _, p := range parents {
+			if !idSet[p.ID] {
+				permissions = append(permissions, p)
+				idSet[p.ID] = true
+				if p.ParentId != nil && !idSet[*p.ParentId] {
+					parentIds = append(parentIds, *p.ParentId)
+				}
 			}
 		}
 	}

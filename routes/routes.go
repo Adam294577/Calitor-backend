@@ -45,6 +45,7 @@ func RouterRegister(route *gin.Engine) {
 	adminAuth.Use(middlewares.Auth())
 	{
 		adminAuth.GET("/me", controllers.GetMe)
+		adminAuth.GET("/menu", controllers.GetPermissionTree)
 		adminAuth.PUT("/password", controllers.ChangePassword)
 
 		// 帳號管理
