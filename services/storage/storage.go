@@ -61,6 +61,8 @@ func NewClient() *Client {
 		log.Info("MinIO bucket「%s」已建立", bucket)
 	}
 
+
+
 	return &Client{
 		client:    minioClient,
 		bucket:    bucket,
@@ -132,6 +134,89 @@ func (c *Client) Download(objectName string) ([]byte, error) {
 	defer obj.Close()
 
 	return io.ReadAll(obj)
+}
+
+// DownloadWithInfo 下載檔案並回傳 content type
+func (c *Client) DownloadWithInfo(objectName string) ([]byte, string, error) {
+	if !c.available {
+		return nil, "", fmt.Errorf("MinIO 服務未啟用")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	obj, err := c.client.GetObject(ctx, c.bucket, objectName, minio.GetObjectOptions{})
+	if err != nil {
+		return nil, "", fmt.Errorf("下載失敗：%w", err)
+	}
+	defer obj.Close()
+
+	info, err := obj.Stat()
+	if err != nil {
+		return nil, "", fmt.Errorf("取得檔案資訊失敗：%w", err)
+	}
+
+	data, err := io.ReadAll(obj)
+	if err != nil {
+		return nil, "", fmt.Errorf("讀取檔案失敗：%w", err)
+	}
+
+	return data, info.ContentType, nil
+}
+
+// ObjectInfo 物件資訊
+type ObjectInfo struct {
+	Key          string
+	LastModified time.Time
+}
+
+// ListObjects 列出指定前綴下的所有物件 key
+func (c *Client) ListObjects(prefix string) ([]string, error) {
+	if !c.available {
+		return nil, fmt.Errorf("MinIO 服務未啟用")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	var keys []string
+	ch := c.client.ListObjects(ctx, c.bucket, minio.ListObjectsOptions{
+		Prefix:    prefix,
+		Recursive: true,
+	})
+	for obj := range ch {
+		if obj.Err != nil {
+			return nil, fmt.Errorf("列出物件失敗：%w", obj.Err)
+		}
+		keys = append(keys, obj.Key)
+	}
+	return keys, nil
+}
+
+// ListObjectsWithInfo 列出指定前綴下的所有物件（含上傳時間）
+func (c *Client) ListObjectsWithInfo(prefix string) ([]ObjectInfo, error) {
+	if !c.available {
+		return nil, fmt.Errorf("MinIO 服務未啟用")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	var objects []ObjectInfo
+	ch := c.client.ListObjects(ctx, c.bucket, minio.ListObjectsOptions{
+		Prefix:    prefix,
+		Recursive: true,
+	})
+	for obj := range ch {
+		if obj.Err != nil {
+			return nil, fmt.Errorf("列出物件失敗：%w", obj.Err)
+		}
+		objects = append(objects, ObjectInfo{
+			Key:          obj.Key,
+			LastModified: obj.LastModified,
+		})
+	}
+	return objects, nil
 }
 
 // Delete 刪除檔案
