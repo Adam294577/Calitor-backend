@@ -495,11 +495,6 @@ func CreateRole(c *gin.Context) {
 	db := models.PostgresNew()
 	defer db.Close()
 
-	if !isCurrentAdminSuper(c, db) {
-		resp.Fail(http.StatusForbidden, "權限不足").Send()
-		return
-	}
-
 	var req createRoleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.Fail(http.StatusBadRequest, "請輸入角色名稱").Send()
@@ -534,11 +529,6 @@ func UpdateRole(c *gin.Context) {
 
 	db := models.PostgresNew()
 	defer db.Close()
-
-	if !isCurrentAdminSuper(c, db) {
-		resp.Fail(http.StatusForbidden, "權限不足").Send()
-		return
-	}
 
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -576,11 +566,6 @@ func DeleteRole(c *gin.Context) {
 
 	db := models.PostgresNew()
 	defer db.Close()
-
-	if !isCurrentAdminSuper(c, db) {
-		resp.Fail(http.StatusForbidden, "權限不足").Send()
-		return
-	}
 
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
@@ -638,11 +623,6 @@ func UpdateRolePermissions(c *gin.Context) {
 
 	db := models.PostgresNew()
 	defer db.Close()
-
-	if !isCurrentAdminSuper(c, db) {
-		resp.Fail(http.StatusForbidden, "權限不足").Send()
-		return
-	}
 
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
