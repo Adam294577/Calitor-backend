@@ -2,7 +2,10 @@ package models
 
 import (
 	"project/services/common"
+	"project/services/log"
 	"time"
+
+	"github.com/spf13/viper"
 )
 
 // Admin 管理員
@@ -19,6 +22,7 @@ type Admin struct {
 }
 
 // SeedDefaultAdmin 初始化預設管理員帳號
+// 密碼從環境變數 SEED_ADMIN_PASSWORD 或設定檔 Server.SeedAdminPassword 讀取
 func SeedDefaultAdmin(db *DBManager) {
 	var count int64
 	db.GetRead().Model(&Admin{}).Count(&count)
@@ -26,7 +30,17 @@ func SeedDefaultAdmin(db *DBManager) {
 		return
 	}
 
-	hashedPassword, _ := common.HashPassword("123")
+	password := viper.GetString("Server.SeedAdminPassword")
+	if password == "" {
+		log.Error("未設定 Server.SeedAdminPassword（或環境變數 SERVER_SEEDADMINPASSWORD），跳過建立預設管理員")
+		return
+	}
+
+	hashedPassword, err := common.HashPassword(password)
+	if err != nil {
+		log.Error("密碼雜湊失敗: %s", err.Error())
+		return
+	}
 	admin := Admin{
 		Account:  "admin",
 		Name:     "管理員",
@@ -34,5 +48,9 @@ func SeedDefaultAdmin(db *DBManager) {
 		RoleId:   1,
 		IsSuper:  true,
 	}
-	db.GetWrite().Create(&admin)
+	if err := db.GetWrite().Create(&admin).Error; err != nil {
+		log.Error("建立預設管理員失敗: %s", err.Error())
+		return
+	}
+	log.Info("已建立預設管理員帳號: admin")
 }
