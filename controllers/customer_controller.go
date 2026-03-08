@@ -5,6 +5,7 @@ import (
 	"project/models"
 	response "project/services/responses"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -49,6 +50,7 @@ func CreateCustomer(c *gin.Context) {
 	}
 
 	item.ID = 0
+	item.CreatedDate = time.Now().Format("20060102")
 	if err := db.GetWrite().Create(&item).Error; err != nil {
 		resp.Panic(err).Send()
 		return

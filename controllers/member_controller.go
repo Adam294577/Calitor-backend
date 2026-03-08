@@ -5,6 +5,7 @@ import (
 	"project/models"
 	response "project/services/responses"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -54,6 +55,7 @@ func CreateMember(c *gin.Context) {
 
 	req.Member.ID = 0
 	req.Member.Brands = nil
+	req.Member.CreatedDate = time.Now().Format("20060102")
 
 	err := db.GetWrite().Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&req.Member).Error; err != nil {

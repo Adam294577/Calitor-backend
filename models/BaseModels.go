@@ -174,18 +174,30 @@ func AllModels() []interface{} {
 		&RolePermission{},
 		&Admin{},
 		// 輔助資料
+		&ProductBrand{},
 		&Brand{},
 		&Location{},
 		&TWPostalArea{},
 		&MemberTier{},
 		&VendorCategory{},
 		&Currency{},
-		&ProductCategory{},
+		&ProductCategory1{},
+		&ProductCategory2{},
+		&ProductCategory3{},
+		&ProductCategory4{},
+		&ProductCategory5{},
+		&SizeGroup{},
+		&SizeOption{},
+		&MaterialOption{},
+		&StockLocation{},
 		// 主檔
 		&RetailCustomer{},
 		&Vendor{},
 		&Member{},
 		&Product{},
+		&ProductCategoryMap{},
+		&ProductVendor{},
+		&ProductSizeStock{},
 	}
 }
 

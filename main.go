@@ -13,8 +13,8 @@ import (
 	"project/routes"
 	"project/services/log"
 	"project/services/redis"
-	"project/services/storage"
 	response "project/services/responses"
+	"project/services/storage"
 	"runtime"
 	"strings"
 	"syscall"
@@ -94,7 +94,7 @@ func App(HttpServer *gin.Engine) {
 	dbTest := models.PostgresNew()
 	fmt.Println("✓ PostgreSQL 資料庫連線成功")
 
-	// 自動遷移資料表
+	// // 自動遷移資料表
 	if err := models.MigrateAll(dbTest); err != nil {
 		fmt.Printf("⚠ 資料表遷移失敗: %s\n", err.Error())
 	} else {
@@ -104,7 +104,7 @@ func App(HttpServer *gin.Engine) {
 	// 初始化預設資料
 	models.SeedPermissionsAndRoles(dbTest)
 	models.SeedDefaultAdmin(dbTest)
-	fmt.Println("✓ 預設資料初始化完成")
+	// fmt.Println("✓ 預設資料初始化完成")
 
 	dbTest.Close()
 
