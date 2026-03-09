@@ -72,12 +72,16 @@ func IPWhiteList() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		resp := response.New(ctx)
 
-		// 取得客戶端 IP：優先從 X-Forwarded-For 取最後一個（反向代理附加的真實 IP）
-		// 若無 XFF 則 fallback 到 RemoteIP（本地開發場景）
+		// 取得客戶端 IP：
+		// 1. 優先使用 Cloudflare 的 CF-Connecting-IP（最可靠）
+		// 2. 其次從 X-Forwarded-For 取第一個（原始客戶端 IP）
+		// 3. 最後 fallback 到 RemoteIP（無代理場景）
 		rawIP := ""
-		if xff := ctx.GetHeader("X-Forwarded-For"); xff != "" {
+		if cfIP := ctx.GetHeader("CF-Connecting-IP"); cfIP != "" {
+			rawIP = strings.TrimSpace(cfIP)
+		} else if xff := ctx.GetHeader("X-Forwarded-For"); xff != "" {
 			xffParts := strings.Split(xff, ",")
-			rawIP = strings.TrimSpace(xffParts[len(xffParts)-1])
+			rawIP = strings.TrimSpace(xffParts[0])
 		} else {
 			rawIP = ctx.RemoteIP()
 		}
