@@ -162,23 +162,32 @@ func App(HttpServer *gin.Engine) {
 	// 使用 ginSwagger.WrapHandler 处理所有 Swagger 路径，包括 doc.json
 	HttpServer.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
-	// 使用 middleware（CORS 需要最先執行，排除 Swagger 路径）
+	// 預建 middleware 實例（只初始化一次，避免每次請求重複建立）
+	corsMiddleware := middlewares.CORS()
+	ipWhiteList := middlewares.IPWhiteList()
+	loggerMiddleware := middlewares.Logger()
+
+	// 使用 middleware（CORS → IP 白名單 → requestID → log → recovery）
 	HttpServer.Use(
 		func(ctx *gin.Context) {
-			// 排除 Swagger 路径
-			if strings.HasPrefix(ctx.Request.URL.Path, "/swagger") {
+			if middlewares.SkipMiddleware(ctx.Request.URL.Path) {
 				ctx.Next()
 				return
 			}
-			middlewares.CORS()(ctx)
+			corsMiddleware(ctx)
 		},
 		func(ctx *gin.Context) {
-			// 排除 Swagger 路径
-			if strings.HasPrefix(ctx.Request.URL.Path, "/swagger") {
+			if middlewares.SkipMiddleware(ctx.Request.URL.Path) {
 				ctx.Next()
 				return
 			}
-			// 設定變數
+			ipWhiteList(ctx)
+		},
+		func(ctx *gin.Context) {
+			if middlewares.SkipMiddleware(ctx.Request.URL.Path) {
+				ctx.Next()
+				return
+			}
 			ctx.Set("requestID", ctx.Request.Header.Get("X-Request-ID"))
 			ctx.Next()
 		},
@@ -194,12 +203,11 @@ func App(HttpServer *gin.Engine) {
 			)
 		},
 		func(ctx *gin.Context) {
-			// 排除 Swagger 路径
-			if strings.HasPrefix(ctx.Request.URL.Path, "/swagger") {
+			if middlewares.SkipMiddleware(ctx.Request.URL.Path) {
 				ctx.Next()
 				return
 			}
-			middlewares.Logger()(ctx)
+			loggerMiddleware(ctx)
 		},
 		gin.Recovery(),
 	)
