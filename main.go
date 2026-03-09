@@ -90,25 +90,23 @@ func App(HttpServer *gin.Engine) {
 	numCPUs := runtime.NumCPU()
 	log.Info("CPU cores: %d", numCPUs)
 
-	// 初始化並檢查 PostgreSQL 連接
-	dbTest := models.PostgresNew()
+	// 初始化全域 PostgreSQL 連線池（啟動一次，所有 controller 共用）
+	db := models.PostgresInit()
 	fmt.Println("✓ PostgreSQL 資料庫連線成功")
 
-	// // 自動遷移資料表
-	if err := models.MigrateAll(dbTest); err != nil {
+	// 自動遷移資料表
+	if err := models.MigrateAll(db); err != nil {
 		fmt.Printf("⚠ 資料表遷移失敗: %s\n", err.Error())
 	} else {
 		fmt.Println("✓ 資料表遷移完成")
 	}
 
 	// 初始化預設資料
-	models.SeedPermissionsAndRoles(dbTest)
-	models.SeedDefaultAdmin(dbTest)
+	models.SeedPermissionsAndRoles(db)
+	models.SeedDefaultAdmin(db)
 
 	// 一次性遷移：將 role_permissions 中的父節點展開為葉子節點
-	// models.MigrateRolePermissionsToLeaf(dbTest)
-
-	dbTest.Close()
+	// models.MigrateRolePermissionsToLeaf(db)
 
 	// 初始化全域 Redis 連接
 	redisClient := redis.InitGlobal()
