@@ -10,6 +10,9 @@ import (
 )
 
 func GetMaterialOptions(c *gin.Context) {
+	if tryListCache(c) {
+		return
+	}
 	resp := response.New(c)
 	db := models.PostgresNew()
 	defer db.Close()
@@ -22,6 +25,7 @@ func GetMaterialOptions(c *gin.Context) {
 	query = ApplySearch(query, c.Query("search"), "name")
 	paged, total := Paginate(c, query, &models.MaterialOption{})
 	paged.Find(&items)
+	setListCache(c, items, total)
 	resp.Success("成功").SetData(items).SetTotal(total).Send()
 }
 
@@ -48,6 +52,7 @@ func CreateMaterialOption(c *gin.Context) {
 		resp.Panic(err).Send()
 		return
 	}
+	invalidateListCache("material-options")
 	resp.Success("新增成功").SetData(item).Send()
 }
 
@@ -89,6 +94,7 @@ func UpdateMaterialOption(c *gin.Context) {
 		updates["is_active"] = *req.IsActive
 	}
 	db.GetWrite().Model(&item).Updates(updates)
+	invalidateListCache("material-options")
 	resp.Success("更新成功").Send()
 }
 
@@ -104,5 +110,6 @@ func DeleteMaterialOption(c *gin.Context) {
 	defer db.Close()
 
 	db.GetWrite().Delete(&models.MaterialOption{}, id)
+	invalidateListCache("material-options")
 	resp.Success("刪除成功").Send()
 }

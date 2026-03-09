@@ -90,32 +90,31 @@ func App(HttpServer *gin.Engine) {
 	numCPUs := runtime.NumCPU()
 	log.Info("CPU cores: %d", numCPUs)
 
-	// 初始化並檢查 PostgreSQL 連接
-	dbTest := models.PostgresNew()
+	// 初始化全域 PostgreSQL 連線池（啟動一次，所有 controller 共用）
+	db := models.PostgresInit()
 	fmt.Println("✓ PostgreSQL 資料庫連線成功")
 
-	// // 自動遷移資料表
-	if err := models.MigrateAll(dbTest); err != nil {
+	// 自動遷移資料表
+	if err := models.MigrateAll(db); err != nil {
 		fmt.Printf("⚠ 資料表遷移失敗: %s\n", err.Error())
 	} else {
 		fmt.Println("✓ 資料表遷移完成")
 	}
 
 	// 初始化預設資料
-	models.SeedPermissionsAndRoles(dbTest)
-	models.SeedDefaultAdmin(dbTest)
-	// fmt.Println("✓ 預設資料初始化完成")
+	models.SeedPermissionsAndRoles(db)
+	models.SeedDefaultAdmin(db)
 
-	dbTest.Close()
+	// 一次性遷移：將 role_permissions 中的父節點展開為葉子節點
+	// models.MigrateRolePermissionsToLeaf(db)
 
-	// 初始化並檢查 Redis 連接
-	redisClient := redis.NewRedisClient()
+	// 初始化全域 Redis 連接
+	redisClient := redis.InitGlobal()
 	if redisClient.IsAvailable() {
 		fmt.Println("✓ Redis 緩存功能已啟用")
 	} else {
 		fmt.Println("⚠ Redis 緩存功能未啟用，將使用優雅降級模式（直接查詢資料庫）")
 	}
-	redisClient.Close() // 關閉測試連接，後續使用時會重新創建
 
 	// 初始化並檢查 MinIO 連接
 	minioClient := storage.NewClient()
@@ -161,23 +160,32 @@ func App(HttpServer *gin.Engine) {
 	// 使用 ginSwagger.WrapHandler 处理所有 Swagger 路径，包括 doc.json
 	HttpServer.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
-	// 使用 middleware（CORS 需要最先執行，排除 Swagger 路径）
+	// 預建 middleware 實例（只初始化一次，避免每次請求重複建立）
+	corsMiddleware := middlewares.CORS()
+	ipWhiteList := middlewares.IPWhiteList()
+	loggerMiddleware := middlewares.Logger()
+
+	// 使用 middleware（CORS → IP 白名單 → requestID → log → recovery）
 	HttpServer.Use(
 		func(ctx *gin.Context) {
-			// 排除 Swagger 路径
-			if strings.HasPrefix(ctx.Request.URL.Path, "/swagger") {
+			if middlewares.SkipMiddleware(ctx.Request.URL.Path) {
 				ctx.Next()
 				return
 			}
-			middlewares.CORS()(ctx)
+			corsMiddleware(ctx)
 		},
 		func(ctx *gin.Context) {
-			// 排除 Swagger 路径
-			if strings.HasPrefix(ctx.Request.URL.Path, "/swagger") {
+			if middlewares.SkipMiddleware(ctx.Request.URL.Path) {
 				ctx.Next()
 				return
 			}
-			// 設定變數
+			ipWhiteList(ctx)
+		},
+		func(ctx *gin.Context) {
+			if middlewares.SkipMiddleware(ctx.Request.URL.Path) {
+				ctx.Next()
+				return
+			}
 			ctx.Set("requestID", ctx.Request.Header.Get("X-Request-ID"))
 			ctx.Next()
 		},
@@ -193,12 +201,11 @@ func App(HttpServer *gin.Engine) {
 			)
 		},
 		func(ctx *gin.Context) {
-			// 排除 Swagger 路径
-			if strings.HasPrefix(ctx.Request.URL.Path, "/swagger") {
+			if middlewares.SkipMiddleware(ctx.Request.URL.Path) {
 				ctx.Next()
 				return
 			}
-			middlewares.Logger()(ctx)
+			loggerMiddleware(ctx)
 		},
 		gin.Recovery(),
 	)

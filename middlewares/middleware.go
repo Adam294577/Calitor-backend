@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"path"
@@ -21,6 +21,96 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 )
+
+// SkipMiddleware 判斷該路徑是否應跳過業務 middleware（swagger、health）
+func SkipMiddleware(path string) bool {
+	return strings.HasPrefix(path, "/swagger") || path == "/health"
+}
+
+// IPWhiteList 限制僅允許白名單內的公網 IP 存取
+// 支援單一 IP 與 CIDR 表示法（例如 "192.168.1.0/24"），逗點分隔多筆
+func IPWhiteList() gin.HandlerFunc {
+	allowedIPStr := viper.GetString("Server.Security.AllowedOfficeIP")
+
+	// 若未設定白名單，不限制（方便本地開發）
+	if strings.TrimSpace(allowedIPStr) == "" {
+		log.Warn("IPWhiteList: AllowedOfficeIP 未設定，IP 防火牆已停用")
+		return func(ctx *gin.Context) {
+			ctx.Next()
+		}
+	}
+
+	// 預先解析白名單：區分精確 IP 與 CIDR 網段
+	parts := strings.Split(allowedIPStr, ",")
+	allowedIPs := make(map[string]bool, len(parts))
+	var allowedNets []*net.IPNet
+
+	for _, entry := range parts {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if strings.Contains(entry, "/") {
+			_, ipNet, err := net.ParseCIDR(entry)
+			if err != nil {
+				log.Error("IPWhiteList: 無法解析 CIDR %s: %s", entry, err.Error())
+				continue
+			}
+			allowedNets = append(allowedNets, ipNet)
+		} else {
+			// 用 net.ParseIP 標準化後存入（處理 IPv4-mapped IPv6 等情況）
+			if parsed := net.ParseIP(entry); parsed != nil {
+				allowedIPs[parsed.String()] = true
+			} else {
+				log.Error("IPWhiteList: 無法解析 IP %s", entry)
+			}
+		}
+	}
+
+	log.Info("IPWhiteList: 已載入 %d 個 IP + %d 個 CIDR 網段", len(allowedIPs), len(allowedNets))
+
+	return func(ctx *gin.Context) {
+		resp := response.New(ctx)
+
+		// 取得客戶端 IP：優先從 X-Forwarded-For 取最後一個（反向代理附加的真實 IP）
+		// 若無 XFF 則 fallback 到 RemoteIP（本地開發場景）
+		rawIP := ""
+		if xff := ctx.GetHeader("X-Forwarded-For"); xff != "" {
+			xffParts := strings.Split(xff, ",")
+			rawIP = strings.TrimSpace(xffParts[len(xffParts)-1])
+		} else {
+			rawIP = ctx.RemoteIP()
+		}
+
+		// 用 net.ParseIP 標準化，確保 IPv6/IPv4 格式一致
+		parsed := net.ParseIP(rawIP)
+		if parsed == nil {
+			log.Warn("IPWhiteList: 無法解析來源 IP [%s]", rawIP)
+			resp.Fail(http.StatusForbidden, "Forbidden").Send()
+			ctx.Abort()
+			return
+		}
+		clientIP := parsed.String()
+
+		// 精確 IP 比對
+		if allowedIPs[clientIP] {
+			ctx.Next()
+			return
+		}
+
+		// CIDR 網段比對
+		for _, ipNet := range allowedNets {
+			if ipNet.Contains(parsed) {
+				ctx.Next()
+				return
+			}
+		}
+
+		log.Warn("IPWhiteList: 拒絕來自 %s 的請求", clientIP)
+		resp.Fail(http.StatusForbidden, "Forbidden").Send()
+		ctx.Abort()
+	}
+}
 
 func Middleware() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
@@ -118,9 +208,6 @@ func Auth() gin.HandlerFunc {
 	}
 }
 
-var hostname string
-var ClientIP string
-
 func Logger() gin.HandlerFunc {
 
 	logFilePath := viper.GetString("Server.Logs.FilePath")
@@ -145,12 +232,11 @@ func Logger() gin.HandlerFunc {
 	return func(ctx *gin.Context) {
 		var bodyBytes []byte
 		if ctx.Request.Body != nil {
-			bodyBytes, _ = ioutil.ReadAll(ctx.Request.Body)
+			bodyBytes, _ = io.ReadAll(ctx.Request.Body)
 		}
 		// 重新放回 Body，讓後續的 ShouldBindJSON 等仍可讀取
-		ctx.Request.Body = ioutil.NopCloser(bytes.NewBuffer(bodyBytes))
-		hostname = ctx.Request.Host
-		ClientIP = ctx.ClientIP()
+		ctx.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		clientIP := ctx.ClientIP()
 		startTime := time.Now()               // 開始時間
 		ctx.Next()                            // 處理請求
 		endTime := time.Now()                 // 結束時間
@@ -160,7 +246,6 @@ func Logger() gin.HandlerFunc {
 		reqPost := common.JsonEncode(ctx.Request.PostForm)
 		reqBody := string(bodyBytes)
 		statusCode := ctx.Writer.Status() // 狀態碼
-		clientIP := GetClientIP()         // 請求IP
 		var heading bytes.Buffer
 		for k, v := range ctx.Request.Header {
 			head := make(map[string]interface{})
@@ -190,14 +275,18 @@ func Logger() gin.HandlerFunc {
 	}
 }
 
-func GetClientIP() string {
-	return ClientIP
-}
-
 // CORS 處理跨域請求的 middleware
 // 從設定檔讀取 Server.AllowedOrigins（字串陣列），若未設定則預設僅允許 localhost
 func CORS() gin.HandlerFunc {
 	allowed := viper.GetStringSlice("Server.AllowedOrigins")
+	// viper 從環境變數讀取 StringSlice 時，不會自動分割逗號
+	// 若只有一個元素且含逗號，手動分割
+	if len(allowed) == 1 && strings.Contains(allowed[0], ",") {
+		allowed = strings.Split(allowed[0], ",")
+		for i := range allowed {
+			allowed[i] = strings.TrimSpace(allowed[i])
+		}
+	}
 	if len(allowed) == 0 {
 		allowed = []string{
 			"http://localhost:5173",

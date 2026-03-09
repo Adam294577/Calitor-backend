@@ -26,9 +26,11 @@ type DBManager struct {
 	SqlDBs  []*sql.DB
 }
 
-// PostgresNew 取得讀寫分離的資料庫連線
-func PostgresNew() *DBManager {
-	// 讀取主庫配置
+// globalDB 全域共用連線池（啟動時初始化一次）
+var globalDB *DBManager
+
+// PostgresInit 初始化全域資料庫連線池（啟動時呼叫一次）
+func PostgresInit() *DBManager {
 	writeConfig := &DBConfig{
 		Hostname: viper.GetString("DataBase.Postgres.Master.HostName"),
 		Username: viper.GetString("DataBase.Postgres.Master.UserName"),
@@ -37,7 +39,6 @@ func PostgresNew() *DBManager {
 		Port:     viper.GetInt("DataBase.Postgres.Master.Port"),
 	}
 
-	// 讀取從庫配置
 	readConfig := &DBConfig{
 		Hostname: viper.GetString("DataBase.Postgres.Slave.HostName"),
 		Username: viper.GetString("DataBase.Postgres.Slave.UserName"),
@@ -48,10 +49,19 @@ func PostgresNew() *DBManager {
 
 	manager, err := NewDBManagerWithReplication(writeConfig, readConfig)
 	if err != nil {
-		//log.Error("建立資料庫錯誤: %s", err.Error())
 		panic(err)
 	}
+	globalDB = manager
 	return manager
+}
+
+// PostgresNew 取得全域共用的資料庫連線池
+// 保留原函式名稱，讓所有 controller 不需改動
+func PostgresNew() *DBManager {
+	if globalDB == nil {
+		return PostgresInit()
+	}
+	return globalDB
 }
 
 // NewDBManagerWithReplication 創建讀寫分離的資料庫管理器
@@ -122,8 +132,14 @@ func (m *DBManager) GetRead() *gorm.DB {
 	return m.ReadDB // 這裡固定返回單一讀庫
 }
 
-// Close 關閉底層 sql 連線
+// Close 為相容性保留，全域連線池模式下不實際關閉連線
+// controller 中的 defer db.Close() 會呼叫此方法，但不會關閉共用連線池
 func (m *DBManager) Close() error {
+	return nil
+}
+
+// Shutdown 真正關閉底層 sql 連線（僅程式結束時呼叫）
+func (m *DBManager) Shutdown() error {
 	var firstErr error
 	for _, sqlDB := range m.SqlDBs {
 		if sqlDB == nil {

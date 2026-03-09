@@ -37,6 +37,9 @@ func parseLevel(c *gin.Context) (int, error) {
 }
 
 func GetProductCategoriesByLevel(c *gin.Context) {
+	if tryListCache(c) {
+		return
+	}
 	resp := response.New(c)
 	level, err := parseLevel(c)
 	if err != nil {
@@ -52,6 +55,7 @@ func GetProductCategoriesByLevel(c *gin.Context) {
 	query = ApplySearch(query, c.Query("search"), "code", "name")
 	paged, total := Paginate(c, query, model)
 	paged.Find(items)
+	setListCache(c, items, total)
 	resp.Success("成功").SetData(items).SetTotal(total).Send()
 }
 
@@ -112,6 +116,7 @@ func CreateProductCategoryByLevel(c *gin.Context) {
 		resp.Panic(createErr).Send()
 		return
 	}
+	invalidateListCache("product-categories")
 	resp.Success("新增成功").SetData(created).Send()
 }
 
@@ -170,6 +175,7 @@ func UpdateProductCategoryByLevel(c *gin.Context) {
 
 	tableName := fmt.Sprintf("product_category_%d", level)
 	db.GetWrite().Table(tableName).Where("id = ?", id).Updates(updates)
+	invalidateListCache("product-categories")
 	resp.Success("更新成功").Send()
 }
 
@@ -204,5 +210,6 @@ func DeleteProductCategoryByLevel(c *gin.Context) {
 		resp.Panic(err).Send()
 		return
 	}
+	invalidateListCache("product-categories")
 	resp.Success("刪除成功").Send()
 }

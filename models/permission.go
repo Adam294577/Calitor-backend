@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // Permission 權限
 type Permission struct {
@@ -19,6 +22,100 @@ type RolePermission struct {
 	ID           int64 `gorm:"primaryKey" json:"id"`
 	RoleId       int64 `gorm:"not null;uniqueIndex:idx_role_permission" json:"role_id"`
 	PermissionId int64 `gorm:"not null;uniqueIndex:idx_role_permission" json:"permission_id"`
+}
+
+// MigrateRolePermissionsToLeaf 一次性遷移：將 role_permissions 中的父節點 ID
+// 展開為其所有葉子節點 ID，移除父節點記錄。
+// 此函式可安全重複執行（冪等），若已無父節點記錄則不做任何事。
+func MigrateRolePermissionsToLeaf(db *DBManager) {
+	// 1. 載入所有權限，建立 parentId → children 映射
+	var allPerms []Permission
+	db.GetRead().Find(&allPerms)
+
+	childrenMap := map[int64][]int64{} // parentId → []childId
+	permById := map[int64]Permission{}
+	for _, p := range allPerms {
+		permById[p.ID] = p
+		if p.ParentId != nil {
+			childrenMap[*p.ParentId] = append(childrenMap[*p.ParentId], p.ID)
+		}
+	}
+
+	// 判斷是否為父節點（有子節點的就是父節點）
+	isParent := func(id int64) bool {
+		return len(childrenMap[id]) > 0
+	}
+
+	// 遞迴取得某節點的所有葉子後代
+	var getLeaves func(id int64) []int64
+	getLeaves = func(id int64) []int64 {
+		children := childrenMap[id]
+		if len(children) == 0 {
+			return []int64{id} // 本身就是葉子
+		}
+		var leaves []int64
+		for _, cid := range children {
+			leaves = append(leaves, getLeaves(cid)...)
+		}
+		return leaves
+	}
+
+	// 2. 取得所有角色
+	var roles []Role
+	db.GetRead().Find(&roles)
+
+	for _, role := range roles {
+		// 3. 取得該角色的所有權限 ID
+		var rps []RolePermission
+		db.GetRead().Where("role_id = ?", role.ID).Find(&rps)
+
+		// 找出哪些是父節點
+		var parentIds []int64
+		existingIds := map[int64]bool{}
+		for _, rp := range rps {
+			existingIds[rp.PermissionId] = true
+			if isParent(rp.PermissionId) {
+				parentIds = append(parentIds, rp.PermissionId)
+			}
+		}
+
+		if len(parentIds) == 0 {
+			continue // 此角色無需遷移
+		}
+
+		// 4. 展開父節點為葉子，並收集需要新增的 ID
+		newLeafIds := map[int64]bool{}
+		for _, pid := range parentIds {
+			for _, lid := range getLeaves(pid) {
+				if !existingIds[lid] {
+					newLeafIds[lid] = true
+				}
+			}
+		}
+
+		// 5. 在事務中：刪除父節點記錄，新增葉子記錄
+		tx := db.GetWrite().Begin()
+		// 刪除父節點
+		if err := tx.Where("role_id = ? AND permission_id IN ?", role.ID, parentIds).
+			Delete(&RolePermission{}).Error; err != nil {
+			tx.Rollback()
+			fmt.Printf("⚠ 遷移角色 %s (ID:%d) 權限失敗(刪除): %s\n", role.Name, role.ID, err.Error())
+			continue
+		}
+		// 新增葉子
+		for lid := range newLeafIds {
+			if err := tx.Create(&RolePermission{RoleId: role.ID, PermissionId: lid}).Error; err != nil {
+				tx.Rollback()
+				fmt.Printf("⚠ 遷移角色 %s (ID:%d) 權限失敗(新增): %s\n", role.Name, role.ID, err.Error())
+				break
+			}
+		}
+		if err := tx.Commit().Error; err != nil {
+			fmt.Printf("⚠ 遷移角色 %s (ID:%d) 權限失敗(commit): %s\n", role.Name, role.ID, err.Error())
+		} else {
+			fmt.Printf("✓ 角色 %s: 移除 %d 個父節點，新增 %d 個葉子節點\n", role.Name, len(parentIds), len(newLeafIds))
+		}
+	}
 }
 
 // SeedPermissionsAndRoles 初始化預設權限與角色
@@ -67,13 +164,17 @@ func SeedPermissionsAndRoles(db *DBManager) {
 	// === 呼叫主檔/輔助資料權限 seed ===
 	SeedMasterDataPermissions(db)
 
-	// === 預設角色 admin，綁定所有權限 ===
+	// === 預設角色 admin，綁定所有葉子權限 ===
 	role := Role{Name: "admin"}
 	db.GetWrite().Where("name = ?", role.Name).FirstOrCreate(&role)
 
-	var allPermissions []Permission
-	db.GetWrite().Find(&allPermissions)
-	for _, p := range allPermissions {
+	// 只綁定葉子節點（沒有子節點的權限），父節點由後端 getAdminPermissions 向上展開
+	var leafOnly []Permission
+	db.GetWrite().Raw(`
+		SELECT p.* FROM permissions p
+		WHERE NOT EXISTS (SELECT 1 FROM permissions c WHERE c.parent_id = p.id)
+	`).Scan(&leafOnly)
+	for _, p := range leafOnly {
 		rp := RolePermission{RoleId: role.ID, PermissionId: p.ID}
 		db.GetWrite().Where("role_id = ? AND permission_id = ?", rp.RoleId, rp.PermissionId).FirstOrCreate(&rp)
 	}
