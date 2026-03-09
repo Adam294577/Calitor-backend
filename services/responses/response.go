@@ -3,9 +3,11 @@ package response
 import (
 	"encoding/xml"
 	"net/http"
+	"project/services/log"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/spf13/viper"
 )
 
 type Responses struct {
@@ -27,6 +29,7 @@ type Response struct {
 	statusCode int64
 	errorName  string
 	data       interface{}
+	total      *int64
 }
 
 type ErrorInterface interface {
@@ -95,22 +98,41 @@ func (rsp *Response) Conflict(message string) *Response {
 }
 
 func (rsp *Response) setErrorData(err interface{}) {
-	rsp.Message = err.(error).Error()
+	realMsg := err.(error).Error()
+
+	// 記錄完整錯誤到 log
+	if rsp.gCtx != nil {
+		log.Error("[%s %s] %s", rsp.gCtx.Request.Method, rsp.gCtx.Request.RequestURI, realMsg)
+	} else {
+		log.Error("%s", realMsg)
+	}
 
 	switch err.(type) {
 	case ErrorInterface:
-		error := err.(ErrorInterface)
-		rsp.statusCode = error.GetStatusCode()
-		rsp.errorName = error.GetErrorName()
+		e := err.(ErrorInterface)
+		rsp.statusCode = e.GetStatusCode()
+		rsp.errorName = e.GetErrorName()
+		rsp.Message = e.GetMessage()
 	default:
-		// default errors
 		rsp.statusCode = 500
+		// Production 環境不暴露內部錯誤訊息
+		if viper.GetString("Server.Mode") == "release" {
+			rsp.Message = "伺服器內部錯誤"
+		} else {
+			rsp.Message = realMsg
+		}
 	}
 }
 
 // SetData ...
 func (rsp *Response) SetData(d interface{}) *Response {
 	rsp.data = d
+	return rsp
+}
+
+// SetTotal 設定分頁總筆數
+func (rsp *Response) SetTotal(t int64) *Response {
+	rsp.total = &t
 	return rsp
 }
 
@@ -152,6 +174,9 @@ func (rsp *Response) Send() {
 			"Status":  rsp.statusCode,
 			"Data":    rsp.data,
 			"Message": rsp.Message,
+		}
+		if rsp.total != nil {
+			resp["Total"] = *rsp.total
 		}
 	} else {
 		resp = gin.H{

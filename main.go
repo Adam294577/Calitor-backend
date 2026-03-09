@@ -13,8 +13,8 @@ import (
 	"project/routes"
 	"project/services/log"
 	"project/services/redis"
-	"project/services/storage"
 	response "project/services/responses"
+	"project/services/storage"
 	"runtime"
 	"strings"
 	"syscall"
@@ -93,16 +93,30 @@ func App(HttpServer *gin.Engine) {
 	// 初始化並檢查 PostgreSQL 連接
 	dbTest := models.PostgresNew()
 	fmt.Println("✓ PostgreSQL 資料庫連線成功")
+
+	// // 自動遷移資料表
+	if err := models.MigrateAll(dbTest); err != nil {
+		fmt.Printf("⚠ 資料表遷移失敗: %s\n", err.Error())
+	} else {
+		fmt.Println("✓ 資料表遷移完成")
+	}
+
+	// 初始化預設資料
+	models.SeedPermissionsAndRoles(dbTest)
+	models.SeedDefaultAdmin(dbTest)
+
+	// 一次性遷移：將 role_permissions 中的父節點展開為葉子節點
+	// models.MigrateRolePermissionsToLeaf(dbTest)
+
 	dbTest.Close()
 
-	// 初始化並檢查 Redis 連接
-	redisClient := redis.NewRedisClient()
+	// 初始化全域 Redis 連接
+	redisClient := redis.InitGlobal()
 	if redisClient.IsAvailable() {
 		fmt.Println("✓ Redis 緩存功能已啟用")
 	} else {
 		fmt.Println("⚠ Redis 緩存功能未啟用，將使用優雅降級模式（直接查詢資料庫）")
 	}
-	redisClient.Close() // 關閉測試連接，後續使用時會重新創建
 
 	// 初始化並檢查 MinIO 連接
 	minioClient := storage.NewClient()
@@ -167,6 +181,17 @@ func App(HttpServer *gin.Engine) {
 			// 設定變數
 			ctx.Set("requestID", ctx.Request.Header.Get("X-Request-ID"))
 			ctx.Next()
+		},
+		// 開發環境終端即時 log
+		func(ctx *gin.Context) {
+			start := time.Now()
+			ctx.Next()
+			fmt.Printf("[API] %3d | %13v | %-7s | %s\n",
+				ctx.Writer.Status(),
+				time.Since(start),
+				ctx.Request.Method,
+				ctx.Request.RequestURI,
+			)
 		},
 		func(ctx *gin.Context) {
 			// 排除 Swagger 路径

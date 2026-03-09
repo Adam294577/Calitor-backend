@@ -32,6 +32,11 @@ func Run() {
 	//			  │ │ │ │ │ │
 	// c.AddFunc("5 * * * * *", func())
 	ctx := map[string]error{}
+	// 每日凌晨 3:00 清理孤兒圖片
+	if _, err := c.AddFunc("0 0 3 * * *", CleanupOrphanImages); err != nil {
+		ctx["cleanup_orphan_images"] = err
+	}
+
 	if viper.GetString("ENV") == "prod" {
 
 	}
