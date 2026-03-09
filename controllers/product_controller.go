@@ -56,7 +56,7 @@ func CreateProduct(c *gin.Context) {
 		OriginalPrice  float64 `json:"original_price"`
 		BillingBrand   string  `json:"billing_brand"`
 		ProductBrandID *int64  `json:"product_brand_id"`
-		TradeMode      int     `json:"trade_mode"`
+		TradeMode      int64   `json:"trade_mode"`
 		IsVisible      bool    `json:"is_visible"`
 		Season         string  `json:"season"`
 		Remark         string  `json:"remark"`

@@ -198,6 +198,14 @@ func GetClientIP() string {
 // 從設定檔讀取 Server.AllowedOrigins（字串陣列），若未設定則預設僅允許 localhost
 func CORS() gin.HandlerFunc {
 	allowed := viper.GetStringSlice("Server.AllowedOrigins")
+	// viper 從環境變數讀取 StringSlice 時，不會自動分割逗號
+	// 若只有一個元素且含逗號，手動分割
+	if len(allowed) == 1 && strings.Contains(allowed[0], ",") {
+		allowed = strings.Split(allowed[0], ",")
+		for i := range allowed {
+			allowed[i] = strings.TrimSpace(allowed[i])
+		}
+	}
 	if len(allowed) == 0 {
 		allowed = []string{
 			"http://localhost:5173",

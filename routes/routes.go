@@ -5,10 +5,8 @@ import (
 	"project/controllers"
 	"project/middlewares"
 	response "project/services/responses"
-	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/spf13/viper"
 )
 
 // RouterRegister 設定路由
@@ -23,19 +21,19 @@ func RouterRegister(route *gin.Engine) {
 	route.GET("/api/file/*path", controllers.ServeFile)
 
 	// 開發環境專用路由（僅 config 包含 "dev" 時註冊）
-	if strings.Contains(viper.ConfigFileUsed(), "dev") {
-		dev := route.Group("/api/dev")
-		{
-			dev.POST("/migrate", controllers.Migrate)
-			dev.POST("/seed-postal-areas", controllers.SeedPostalAreas)
-			dev.POST("/seed-product-categories", controllers.SeedProductCategories)
-			dev.POST("/seed-vendors", controllers.SeedVendors)
-			dev.POST("/seed-size-groups", controllers.SeedSizeGroups)
-			dev.POST("/seed-material-options", controllers.SeedMaterialOptions)
-		dev.POST("/cleanup-orphan-images", controllers.CleanupOrphanImages)
-			dev.POST("/reset-super-admin", controllers.ResetSuperAdmin)
-		}
-	}
+	// if strings.Contains(viper.ConfigFileUsed(), "dev") {
+	// dev := route.Group("/api/dev")
+	// {
+	// dev.POST("/migrate", controllers.Migrate)
+	// 	dev.POST("/seed-postal-areas", controllers.SeedPostalAreas)
+	// 	dev.POST("/seed-product-categories", controllers.SeedProductCategories)
+	// 	dev.POST("/seed-vendors", controllers.SeedVendors)
+	// 	dev.POST("/seed-size-groups", controllers.SeedSizeGroups)
+	// 	dev.POST("/seed-material-options", controllers.SeedMaterialOptions)
+	// dev.POST("/cleanup-orphan-images", controllers.CleanupOrphanImages)
+	// 	dev.POST("/reset-super-admin", controllers.ResetSuperAdmin)
+	// }
+	// }
 
 	admin := route.Group("/api/admin")
 	{
@@ -47,6 +45,7 @@ func RouterRegister(route *gin.Engine) {
 	adminAuth.Use(middlewares.Auth())
 	{
 		adminAuth.GET("/me", controllers.GetMe)
+		adminAuth.GET("/menu", controllers.GetPermissionTree)
 		adminAuth.PUT("/password", controllers.ChangePassword)
 
 		// 帳號管理

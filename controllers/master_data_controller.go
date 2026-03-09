@@ -12,6 +12,9 @@ import (
 // ==================== Brand ====================
 
 func GetBrands(c *gin.Context) {
+	if tryListCache(c) {
+		return
+	}
 	resp := response.New(c)
 	db := models.PostgresNew()
 	defer db.Close()
@@ -21,6 +24,7 @@ func GetBrands(c *gin.Context) {
 	query = ApplySearch(query, c.Query("search"), "code", "name")
 	paged, total := Paginate(c, query, &models.Brand{})
 	paged.Find(&items)
+	setListCache(c, items, total)
 	resp.Success("成功").SetData(items).SetTotal(total).Send()
 }
 
@@ -54,6 +58,7 @@ func CreateBrand(c *gin.Context) {
 		resp.Panic(err).Send()
 		return
 	}
+	invalidateListCache("brands")
 	resp.Success("新增成功").SetData(item).Send()
 }
 
@@ -104,6 +109,7 @@ func UpdateBrand(c *gin.Context) {
 		updates["is_active"] = *req.IsActive
 	}
 	db.GetWrite().Model(&item).Updates(updates)
+	invalidateListCache("brands")
 	resp.Success("更新成功").Send()
 }
 
@@ -127,12 +133,16 @@ func DeleteBrand(c *gin.Context) {
 	}
 
 	db.GetWrite().Delete(&models.Brand{}, id)
+	invalidateListCache("brands")
 	resp.Success("刪除成功").Send()
 }
 
 // ==================== Location ====================
 
 func GetLocations(c *gin.Context) {
+	if tryListCache(c) {
+		return
+	}
 	resp := response.New(c)
 	db := models.PostgresNew()
 	defer db.Close()
@@ -142,6 +152,7 @@ func GetLocations(c *gin.Context) {
 	query = ApplySearch(query, c.Query("search"), "code", "name")
 	paged, total := Paginate(c, query, &models.Location{})
 	paged.Find(&items)
+	setListCache(c, items, total)
 	resp.Success("成功").SetData(items).SetTotal(total).Send()
 }
 
@@ -175,6 +186,7 @@ func CreateLocation(c *gin.Context) {
 		resp.Panic(err).Send()
 		return
 	}
+	invalidateListCache("locations")
 	resp.Success("新增成功").SetData(item).Send()
 }
 
@@ -225,6 +237,7 @@ func UpdateLocation(c *gin.Context) {
 		updates["is_active"] = *req.IsActive
 	}
 	db.GetWrite().Model(&item).Updates(updates)
+	invalidateListCache("locations")
 	resp.Success("更新成功").Send()
 }
 
@@ -247,12 +260,16 @@ func DeleteLocation(c *gin.Context) {
 	}
 
 	db.GetWrite().Delete(&models.Location{}, id)
+	invalidateListCache("locations")
 	resp.Success("刪除成功").Send()
 }
 
 // ==================== TWPostalArea ====================
 
 func GetPostalAreas(c *gin.Context) {
+	if tryListCache(c) {
+		return
+	}
 	resp := response.New(c)
 	db := models.PostgresNew()
 	defer db.Close()
@@ -262,6 +279,7 @@ func GetPostalAreas(c *gin.Context) {
 	query = ApplySearch(query, c.Query("search"), "code", "name")
 	paged, total := Paginate(c, query, &models.TWPostalArea{})
 	paged.Find(&items)
+	setListCache(c, items, total)
 	resp.Success("成功").SetData(items).SetTotal(total).Send()
 }
 
@@ -295,6 +313,7 @@ func CreatePostalArea(c *gin.Context) {
 		resp.Panic(err).Send()
 		return
 	}
+	invalidateListCache("postal-areas")
 	resp.Success("新增成功").SetData(item).Send()
 }
 
@@ -345,6 +364,7 @@ func UpdatePostalArea(c *gin.Context) {
 		updates["is_active"] = *req.IsActive
 	}
 	db.GetWrite().Model(&item).Updates(updates)
+	invalidateListCache("postal-areas")
 	resp.Success("更新成功").Send()
 }
 
@@ -360,12 +380,16 @@ func DeletePostalArea(c *gin.Context) {
 	defer db.Close()
 
 	db.GetWrite().Delete(&models.TWPostalArea{}, id)
+	invalidateListCache("postal-areas")
 	resp.Success("刪除成功").Send()
 }
 
 // ==================== MemberTier ====================
 
 func GetMemberTiers(c *gin.Context) {
+	if tryListCache(c) {
+		return
+	}
 	resp := response.New(c)
 	db := models.PostgresNew()
 	defer db.Close()
@@ -375,6 +399,7 @@ func GetMemberTiers(c *gin.Context) {
 	query = ApplySearch(query, c.Query("search"), "code", "name")
 	paged, total := Paginate(c, query, &models.MemberTier{})
 	paged.Find(&items)
+	setListCache(c, items, total)
 	resp.Success("成功").SetData(items).SetTotal(total).Send()
 }
 
@@ -408,6 +433,7 @@ func CreateMemberTier(c *gin.Context) {
 		resp.Panic(err).Send()
 		return
 	}
+	invalidateListCache("member-tiers")
 	resp.Success("新增成功").SetData(item).Send()
 }
 
@@ -458,6 +484,7 @@ func UpdateMemberTier(c *gin.Context) {
 		updates["is_active"] = *req.IsActive
 	}
 	db.GetWrite().Model(&item).Updates(updates)
+	invalidateListCache("member-tiers")
 	resp.Success("更新成功").Send()
 }
 
@@ -480,12 +507,16 @@ func DeleteMemberTier(c *gin.Context) {
 	}
 
 	db.GetWrite().Delete(&models.MemberTier{}, id)
+	invalidateListCache("member-tiers")
 	resp.Success("刪除成功").Send()
 }
 
 // ==================== VendorCategory ====================
 
 func GetVendorCategories(c *gin.Context) {
+	if tryListCache(c) {
+		return
+	}
 	resp := response.New(c)
 	db := models.PostgresNew()
 	defer db.Close()
@@ -495,6 +526,7 @@ func GetVendorCategories(c *gin.Context) {
 	query = ApplySearch(query, c.Query("search"), "name")
 	paged, total := Paginate(c, query, &models.VendorCategory{})
 	paged.Find(&items)
+	setListCache(c, items, total)
 	resp.Success("成功").SetData(items).SetTotal(total).Send()
 }
 
@@ -516,6 +548,7 @@ func CreateVendorCategory(c *gin.Context) {
 		resp.Panic(err).Send()
 		return
 	}
+	invalidateListCache("vendor-categories", "vendors")
 	resp.Success("新增成功").SetData(item).Send()
 }
 
@@ -547,6 +580,7 @@ func UpdateVendorCategory(c *gin.Context) {
 	if req.Name != "" {
 		db.GetWrite().Model(&item).Update("name", req.Name)
 	}
+	invalidateListCache("vendor-categories", "vendors")
 	resp.Success("更新成功").Send()
 }
 
@@ -569,12 +603,16 @@ func DeleteVendorCategory(c *gin.Context) {
 	}
 
 	db.GetWrite().Delete(&models.VendorCategory{}, id)
+	invalidateListCache("vendor-categories", "vendors")
 	resp.Success("刪除成功").Send()
 }
 
 // ==================== Currency ====================
 
 func GetCurrencies(c *gin.Context) {
+	if tryListCache(c) {
+		return
+	}
 	resp := response.New(c)
 	db := models.PostgresNew()
 	defer db.Close()
@@ -584,6 +622,7 @@ func GetCurrencies(c *gin.Context) {
 	query = ApplySearch(query, c.Query("search"), "code", "name")
 	paged, total := Paginate(c, query, &models.Currency{})
 	paged.Find(&items)
+	setListCache(c, items, total)
 	resp.Success("成功").SetData(items).SetTotal(total).Send()
 }
 
@@ -618,6 +657,7 @@ func CreateCurrency(c *gin.Context) {
 		resp.Panic(err).Send()
 		return
 	}
+	invalidateListCache("currencies")
 	resp.Success("新增成功").SetData(item).Send()
 }
 
@@ -672,6 +712,7 @@ func UpdateCurrency(c *gin.Context) {
 		updates["is_active"] = *req.IsActive
 	}
 	db.GetWrite().Model(&item).Updates(updates)
+	invalidateListCache("currencies")
 	resp.Success("更新成功").Send()
 }
 
@@ -689,6 +730,7 @@ func DeleteCurrency(c *gin.Context) {
 	// Currency 不再是 Product 的 FK，可直接刪除
 
 	db.GetWrite().Delete(&models.Currency{}, id)
+	invalidateListCache("currencies")
 	resp.Success("刪除成功").Send()
 }
 

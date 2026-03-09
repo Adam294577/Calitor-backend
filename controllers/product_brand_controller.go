@@ -10,6 +10,9 @@ import (
 )
 
 func GetProductBrands(c *gin.Context) {
+	if tryListCache(c) {
+		return
+	}
 	resp := response.New(c)
 	db := models.PostgresNew()
 	defer db.Close()
@@ -19,6 +22,7 @@ func GetProductBrands(c *gin.Context) {
 	query = ApplySearch(query, c.Query("search"), "code", "name")
 	paged, total := Paginate(c, query, &models.ProductBrand{})
 	paged.Find(&items)
+	setListCache(c, items, total)
 	resp.Success("成功").SetData(items).SetTotal(total).Send()
 }
 
@@ -52,6 +56,7 @@ func CreateProductBrand(c *gin.Context) {
 		resp.Panic(err).Send()
 		return
 	}
+	invalidateListCache("product-brands")
 	resp.Success("新增成功").SetData(item).Send()
 }
 
@@ -102,6 +107,7 @@ func UpdateProductBrand(c *gin.Context) {
 		updates["is_active"] = *req.IsActive
 	}
 	db.GetWrite().Model(&item).Updates(updates)
+	invalidateListCache("product-brands")
 	resp.Success("更新成功").Send()
 }
 
@@ -124,5 +130,6 @@ func DeleteProductBrand(c *gin.Context) {
 	}
 
 	db.GetWrite().Delete(&models.ProductBrand{}, id)
+	invalidateListCache("product-brands")
 	resp.Success("刪除成功").Send()
 }

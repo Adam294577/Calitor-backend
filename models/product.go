@@ -24,7 +24,7 @@ type Product struct {
 	SpecialPrice   float64        `gorm:"type:numeric(18,2)" json:"special_price"`     // 特價
 	OriginalPrice  float64        `gorm:"type:numeric(18,2)" json:"original_price"`    // 原幣價
 	BillingBrand   string         `gorm:"type:varchar(100)" json:"billing_brand"`      // 對帳品牌
-	TradeMode      int            `gorm:"default:1" json:"trade_mode"` // 買賣方式 1:買斷 2:寄賣
+	TradeMode      int64          `gorm:"type:bigint;default:1" json:"trade_mode"` // 買賣方式 1:買斷 2:寄賣
 	IsVisible      bool           `gorm:"default:true" json:"is_visible"`              // 顯示方式
 	Remark         string         `gorm:"type:text" json:"remark"`                     // 備註
 	MaterialOuter  string         `gorm:"type:varchar(200)" json:"material_outer"`     // 材質（外）

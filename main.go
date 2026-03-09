@@ -104,18 +104,19 @@ func App(HttpServer *gin.Engine) {
 	// 初始化預設資料
 	models.SeedPermissionsAndRoles(dbTest)
 	models.SeedDefaultAdmin(dbTest)
-	// fmt.Println("✓ 預設資料初始化完成")
+
+	// 一次性遷移：將 role_permissions 中的父節點展開為葉子節點
+	// models.MigrateRolePermissionsToLeaf(dbTest)
 
 	dbTest.Close()
 
-	// 初始化並檢查 Redis 連接
-	redisClient := redis.NewRedisClient()
+	// 初始化全域 Redis 連接
+	redisClient := redis.InitGlobal()
 	if redisClient.IsAvailable() {
 		fmt.Println("✓ Redis 緩存功能已啟用")
 	} else {
 		fmt.Println("⚠ Redis 緩存功能未啟用，將使用優雅降級模式（直接查詢資料庫）")
 	}
-	redisClient.Close() // 關閉測試連接，後續使用時會重新創建
 
 	// 初始化並檢查 MinIO 連接
 	minioClient := storage.NewClient()
