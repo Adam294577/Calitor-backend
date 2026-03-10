@@ -2,7 +2,6 @@ package routes
 
 import (
 	"fmt"
-	"net/http"
 	"project/controllers"
 	"project/middlewares"
 	response "project/services/responses"
@@ -16,17 +15,6 @@ func RouterRegister(route *gin.Engine) {
 		fmt.Println("=== HEALTH CHECK ===")
 		resp := response.New(ctx)
 		resp.Success("成功").Send()
-	})
-
-	// DEBUG: 顯示所有 IP 來源，確認後移除
-	route.GET("/debug/ip", func(ctx *gin.Context) {
-		ctx.JSON(http.StatusOK, gin.H{
-			"RemoteIP":         ctx.RemoteIP(),
-			"ClientIP":         ctx.ClientIP(),
-			"CF-Connecting-IP": ctx.GetHeader("CF-Connecting-IP"),
-			"X-Forwarded-For":  ctx.GetHeader("X-Forwarded-For"),
-			"X-Real-IP":        ctx.GetHeader("X-Real-IP"),
-		})
 	})
 
 	// 檔案代理（MinIO proxy，公開存取）
@@ -50,7 +38,7 @@ func RouterRegister(route *gin.Engine) {
 	admin := route.Group("/api/admin")
 	{
 		// 公開路由
-		admin.POST("/login", controllers.Login)
+		admin.POST("/login", middlewares.LoginRateLimit(), controllers.Login)
 	}
 
 	adminAuth := route.Group("/api/admin")
