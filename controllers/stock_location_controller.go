@@ -15,8 +15,11 @@ func GetStockLocations(c *gin.Context) {
 	defer db.Close()
 
 	var items []models.StockLocation
-	query := db.GetRead().Order("id ASC")
+	query := db.GetRead().Preload("Customer").Order("id ASC")
 	query = ApplySearch(query, c.Query("search"), "code", "name")
+	if custId := c.Query("customer_id"); custId != "" {
+		query = query.Where("customer_id = ?", custId)
+	}
 	paged, total := Paginate(c, query, &models.StockLocation{})
 	paged.Find(&items)
 	resp.Success("成功").SetData(items).SetTotal(total).Send()
@@ -25,17 +28,29 @@ func GetStockLocations(c *gin.Context) {
 func CreateStockLocation(c *gin.Context) {
 	resp := response.New(c)
 	var req struct {
-		Code     string `json:"code" binding:"required"`
-		Name     string `json:"name" binding:"required"`
-		IsActive *bool  `json:"is_active"`
+		Code       string `json:"code" binding:"required"`
+		Name       string `json:"name" binding:"required"`
+		CustomerID int64  `json:"customer_id" binding:"required"`
+		IsActive   *bool  `json:"is_active"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		resp.Fail(http.StatusBadRequest, "請填寫完整資料").Send()
+		resp.Fail(http.StatusBadRequest, "請填寫完整資料（含客戶）").Send()
 		return
 	}
 
 	db := models.PostgresNew()
 	defer db.Close()
+
+	// 檢查客戶存在且已啟用庫點功能
+	var customer models.RetailCustomer
+	if err := db.GetRead().Where("id = ?", req.CustomerID).First(&customer).Error; err != nil {
+		resp.Fail(http.StatusBadRequest, "客戶不存在").Send()
+		return
+	}
+	if !customer.HasStockLocation {
+		resp.Fail(http.StatusBadRequest, "該客戶未啟用庫點功能").Send()
+		return
+	}
 
 	var count int64
 	db.GetRead().Model(&models.StockLocation{}).Where("code = ?", req.Code).Count(&count)
@@ -44,7 +59,7 @@ func CreateStockLocation(c *gin.Context) {
 		return
 	}
 
-	item := models.StockLocation{Code: req.Code, Name: req.Name, IsActive: true}
+	item := models.StockLocation{Code: req.Code, Name: req.Name, CustomerID: req.CustomerID, IsActive: true}
 	if req.IsActive != nil {
 		item.IsActive = *req.IsActive
 	}
@@ -64,7 +79,6 @@ func UpdateStockLocation(c *gin.Context) {
 	}
 
 	var req struct {
-		Code     string `json:"code"`
 		Name     string `json:"name"`
 		IsActive *bool  `json:"is_active"`
 	}
@@ -82,19 +96,7 @@ func UpdateStockLocation(c *gin.Context) {
 		return
 	}
 
-	if req.Code != "" && req.Code != item.Code {
-		var count int64
-		db.GetRead().Model(&models.StockLocation{}).Where("code = ? AND id != ?", req.Code, id).Count(&count)
-		if count > 0 {
-			resp.Fail(http.StatusBadRequest, "代號已存在").Send()
-			return
-		}
-	}
-
 	updates := map[string]interface{}{}
-	if req.Code != "" {
-		updates["code"] = req.Code
-	}
 	if req.Name != "" {
 		updates["name"] = req.Name
 	}

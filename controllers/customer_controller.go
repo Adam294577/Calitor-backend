@@ -104,9 +104,16 @@ func UpdateCustomer(c *gin.Context) {
 		LocationId         *int64   `json:"location_id"`
 		District           *string  `json:"district"`
 		Note               *string  `json:"note"`
+		HasStockLocation   *bool    `json:"has_stock_location"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
+		return
+	}
+
+	// HasStockLocation 一旦為 true 就不可改回 false
+	if req.HasStockLocation != nil && !*req.HasStockLocation && existing.HasStockLocation {
+		resp.Fail(http.StatusBadRequest, "庫點功能已啟用，無法關閉").Send()
 		return
 	}
 
