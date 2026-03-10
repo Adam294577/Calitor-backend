@@ -2,9 +2,11 @@ package controllers
 
 import (
 	"net/http"
+	"project/middlewares"
 	"project/models"
 	"project/services/common"
 	"project/services/library"
+	"project/services/log"
 	response "project/services/responses"
 	"strconv"
 
@@ -30,24 +32,34 @@ func Login(c *gin.Context) {
 	db := models.PostgresNew()
 	defer db.Close()
 
+	ip := c.ClientIP()
+
 	// 查詢帳號
 	var admin models.Admin
 	if err := db.GetRead().Where("account = ?", req.Account).First(&admin).Error; err != nil {
+		log.Warn("登入失敗: IP=%s 帳號=%s（帳號不存在）", ip, req.Account)
+		middlewares.LoginRateLimitIncr(ip)
 		resp.Fail(http.StatusBadRequest, "帳號或密碼錯誤").Send()
 		return
 	}
 
 	// 檢查停權
 	if admin.IsDisabled {
+		log.Warn("登入失敗: IP=%s 帳號=%s（帳號已停權）", ip, req.Account)
 		resp.Fail(http.StatusBadRequest, "帳號已停權").Send()
 		return
 	}
 
 	// 驗證密碼
 	if !common.CheckPasswordHash(admin.Password, req.Password) {
+		log.Warn("登入失敗: IP=%s 帳號=%s（密碼錯誤）", ip, req.Account)
+		middlewares.LoginRateLimitIncr(ip)
 		resp.Fail(http.StatusBadRequest, "帳號或密碼錯誤").Send()
 		return
 	}
+
+	// 登入成功，重置 rate limit 計數
+	middlewares.LoginRateLimitReset(ip)
 
 	// 查詢權限
 	permissions := getAdminPermissions(db, &admin)
