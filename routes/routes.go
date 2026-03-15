@@ -20,19 +20,18 @@ func RouterRegister(route *gin.Engine) {
 	// 檔案代理（MinIO proxy，公開存取）
 	route.GET("/api/file/*path", controllers.ServeFile)
 
-	// 開發環境專用路由（僅 config 包含 "dev" 時註冊）
-	// if strings.Contains(viper.ConfigFileUsed(), "dev") {
+	// 開發環境專用路由
 	// dev := route.Group("/api/dev")
 	// {
-	// dev.POST("/migrate", controllers.Migrate)
+	// 	dev.POST("/migrate", controllers.Migrate)
+	// 	dev.POST("/seed-products", controllers.SeedProducts)
 	// 	dev.POST("/seed-postal-areas", controllers.SeedPostalAreas)
 	// 	dev.POST("/seed-product-categories", controllers.SeedProductCategories)
 	// 	dev.POST("/seed-vendors", controllers.SeedVendors)
 	// 	dev.POST("/seed-size-groups", controllers.SeedSizeGroups)
 	// 	dev.POST("/seed-material-options", controllers.SeedMaterialOptions)
-	// dev.POST("/cleanup-orphan-images", controllers.CleanupOrphanImages)
+	// 	dev.POST("/cleanup-orphan-images", controllers.CleanupOrphanImages)
 	// 	dev.POST("/reset-super-admin", controllers.ResetSuperAdmin)
-	// }
 	// }
 
 	admin := route.Group("/api/admin")
@@ -133,12 +132,6 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.PUT("/material-options/:id", middlewares.RequirePermission("material-options.edit"), controllers.UpdateMaterialOption)
 		adminAuth.DELETE("/material-options/:id", middlewares.RequirePermission("material-options.delete"), controllers.DeleteMaterialOption)
 
-		// 輔助資料 - 庫點
-		adminAuth.GET("/stock-locations", middlewares.RequirePermission("stock-locations.view"), controllers.GetStockLocations)
-		adminAuth.POST("/stock-locations", middlewares.RequirePermission("stock-locations.create"), controllers.CreateStockLocation)
-		adminAuth.PUT("/stock-locations/:id", middlewares.RequirePermission("stock-locations.edit"), controllers.UpdateStockLocation)
-		adminAuth.DELETE("/stock-locations/:id", middlewares.RequirePermission("stock-locations.delete"), controllers.DeleteStockLocation)
-
 		// 主檔 - 客戶
 		adminAuth.GET("/customers", middlewares.RequirePermission("customers.view"), controllers.GetCustomers)
 		adminAuth.POST("/customers", middlewares.RequirePermission("customers.create"), controllers.CreateCustomer)
@@ -162,6 +155,33 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.POST("/products", middlewares.RequirePermission("product-mgmt.create"), controllers.CreateProduct)
 		adminAuth.PUT("/products/:id", middlewares.RequirePermission("product-mgmt.edit"), controllers.UpdateProduct)
 		adminAuth.DELETE("/products/:id", middlewares.RequirePermission("product-mgmt.delete"), controllers.DeleteProduct)
+
+		// 商品搜尋（供採購單等作業用）
+		adminAuth.GET("/products/search", middlewares.RequirePermission("purchases.view"), controllers.SearchProducts)
+
+		// 日常作業 - 採購未交統計
+		adminAuth.GET("/purchases/outstanding", middlewares.RequirePermission("purchase-outstanding.view"), controllers.GetPurchaseOutstanding)
+
+		// 日常作業 - 廠商採購
+		adminAuth.GET("/purchases", middlewares.RequirePermission("purchases.view"), controllers.GetPurchases)
+		adminAuth.GET("/purchases/:id", middlewares.RequirePermission("purchases.view"), controllers.GetPurchase)
+		adminAuth.POST("/purchases", middlewares.RequirePermission("purchases.create"), controllers.CreatePurchase)
+		adminAuth.PUT("/purchases/:id", middlewares.RequirePermission("purchases.edit"), controllers.UpdatePurchase)
+		adminAuth.DELETE("/purchases/:id", middlewares.RequirePermission("purchases.delete"), controllers.DeletePurchase)
+
+		// 採購單搜尋（供進貨單選擇關聯採購）
+		adminAuth.GET("/purchases/search", middlewares.RequirePermission("stocks.view"), controllers.SearchPurchases)
+
+		// 日常作業 - 廠商進貨
+		adminAuth.GET("/stocks", middlewares.RequirePermission("stocks.view"), controllers.GetStocks)
+		adminAuth.GET("/stocks/:id", middlewares.RequirePermission("stocks.view"), controllers.GetStock)
+		adminAuth.POST("/stocks", middlewares.RequirePermission("stocks.create"), controllers.CreateStock)
+		adminAuth.PUT("/stocks/:id", middlewares.RequirePermission("stocks.edit"), controllers.UpdateStock)
+		adminAuth.DELETE("/stocks/:id", middlewares.RequirePermission("stocks.delete"), controllers.DeleteStock)
+
+		// 成本轉換公式
+		adminAuth.GET("/cost-formulas", controllers.GetCostFormulas)
+		adminAuth.POST("/cost-formulas/seed", controllers.SeedCostFormulas)
 
 		// 圖片上傳
 		adminAuth.POST("/upload/product-image", middlewares.RequirePermission("product-mgmt.create"), controllers.UploadProductImage)
