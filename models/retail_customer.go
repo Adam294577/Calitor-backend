@@ -41,5 +41,4 @@ type RetailCustomer struct {
 	Location           *Location      `gorm:"foreignKey:LocationId" json:"location,omitempty"`
 	District           string         `gorm:"type:varchar(100)" json:"district"`
 	Note               string         `gorm:"type:text" json:"note"`
-	HasStockLocation   bool           `gorm:"default:false" json:"has_stock_location"`
 }

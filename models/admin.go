@@ -18,7 +18,7 @@ type Admin struct {
 	Account    string    `gorm:"type:varchar(255);uniqueIndex;not null" json:"account"`
 	Name       string    `gorm:"type:varchar(255);not null" json:"name"`
 	Password   string    `gorm:"type:varchar(255);not null" json:"-"`
-	RoleId     int64     `gorm:"not null" json:"role_id"`
+	RoleId     int64     `gorm:"not null;index" json:"role_id"`
 }
 
 // SeedDefaultAdmin 初始化預設管理員帳號
