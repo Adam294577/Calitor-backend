@@ -21,6 +21,9 @@ func GetCustomers(c *gin.Context) {
 	if locId := c.Query("location_id"); locId != "" {
 		query = query.Where("location_id = ?", locId)
 	}
+	if hsl := c.Query("has_stock_location"); hsl != "" {
+		query = query.Where("has_stock_location = ?", hsl == "true")
+	}
 	paged, total := Paginate(c, query, &models.RetailCustomer{})
 	paged.Find(&items)
 	resp.Success("成功").SetData(items).SetTotal(total).Send()

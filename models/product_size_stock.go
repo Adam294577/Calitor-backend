@@ -8,7 +8,7 @@ type ProductSizeStock struct {
 	CreatedAt       time.Time      `json:"created_at"`
 	UpdatedAt       time.Time      `json:"updated_at"`
 	ProductID       int64          `gorm:"not null;uniqueIndex:idx_product_location_size" json:"product_id"`
-	StockLocationID int64          `gorm:"not null;uniqueIndex:idx_product_location_size" json:"stock_location_id"`
+	StockLocationID int64          `gorm:"not null;uniqueIndex:idx_product_location_size;index" json:"stock_location_id"`
 	StockLocation   *StockLocation `gorm:"foreignKey:StockLocationID" json:"stock_location,omitempty"`
 	SizeOptionID    int64          `gorm:"not null;uniqueIndex:idx_product_location_size" json:"size_option_id"`
 	SizeOption      *SizeOption    `gorm:"foreignKey:SizeOptionID" json:"size_option,omitempty"`

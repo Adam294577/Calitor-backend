@@ -17,7 +17,16 @@ func GetProducts(c *gin.Context) {
 	defer db.Close()
 
 	var items []models.Product
-	query := db.GetRead().
+	query := db.GetRead().Order("id ASC")
+	query = ApplySearch(query, c.Query("search"), "model_code", "name_spec")
+	if brandId := c.Query("brand_id"); brandId != "" {
+		query = query.Where("brand_id = ?", brandId)
+	}
+	if vendorId := c.Query("vendor_id"); vendorId != "" {
+		query = query.Where("id IN (SELECT product_id FROM product_vendors WHERE vendor_id = ?)", vendorId)
+	}
+	paged, total := Paginate(c, query, &models.Product{})
+	paged.
 		Preload("ProductBrand").
 		Preload("Brand").
 		Preload("Size1Group.Options").
@@ -29,16 +38,7 @@ func GetProducts(c *gin.Context) {
 		Preload("CategoryMaps.Category3").
 		Preload("CategoryMaps.Category4").
 		Preload("CategoryMaps.Category5").
-		Order("id ASC")
-	query = ApplySearch(query, c.Query("search"), "model_code", "name_spec")
-	if brandId := c.Query("brand_id"); brandId != "" {
-		query = query.Where("brand_id = ?", brandId)
-	}
-	if vendorId := c.Query("vendor_id"); vendorId != "" {
-		query = query.Where("id IN (SELECT product_id FROM product_vendors WHERE vendor_id = ?)", vendorId)
-	}
-	paged, total := Paginate(c, query, &models.Product{})
-	paged.Find(&items)
+		Find(&items)
 	resp.Success("成功").SetData(items).SetTotal(total).Send()
 }
 
