@@ -81,4 +81,3 @@ type Currency struct {
 	Symbol    string         `gorm:"type:varchar(10)" json:"symbol"`
 	IsActive  bool           `gorm:"default:true" json:"is_active"`
 }
-

@@ -61,8 +61,6 @@ func NewClient() *Client {
 		log.Info("MinIO bucket「%s」已建立", bucket)
 	}
 
-
-
 	return &Client{
 		client:    minioClient,
 		bucket:    bucket,
