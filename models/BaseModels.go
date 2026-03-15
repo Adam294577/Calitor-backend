@@ -205,7 +205,6 @@ func AllModels() []interface{} {
 		&SizeGroup{},
 		&SizeOption{},
 		&MaterialOption{},
-		&StockLocation{},
 		// 主檔
 		&RetailCustomer{},
 		&Vendor{},
@@ -214,6 +213,14 @@ func AllModels() []interface{} {
 		&ProductCategoryMap{},
 		&ProductVendor{},
 		&ProductSizeStock{},
+		// 日常作業
+		&Purchase{},
+		&PurchaseItem{},
+		&PurchaseItemSize{},
+		&Stock{},
+		&StockItem{},
+		&StockItemSize{},
+		&CostFormula{},
 	}
 }
 
