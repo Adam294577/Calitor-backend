@@ -237,7 +237,6 @@ func SeedMasterDataPermissions(db *DBManager) {
 		{Key: "currencies", Name: "幣別管理", Sort: 7, ParentId: &auxiliaryData.ID},
 		{Key: "size-groups", Name: "尺碼群組", Sort: 8, ParentId: &auxiliaryData.ID},
 		{Key: "material-options", Name: "材質選項", Sort: 9, ParentId: &auxiliaryData.ID},
-		{Key: "stock-locations", Name: "庫點管理", Sort: 10, ParentId: &auxiliaryData.ID},
 	}
 	for i, p := range auxMid {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&auxMid[i])
@@ -296,14 +295,43 @@ func SeedMasterDataPermissions(db *DBManager) {
 		{Key: "material-options.create", Name: "新增材質選項", Sort: 2, ParentId: &auxMid[9].ID},
 		{Key: "material-options.edit", Name: "編輯材質選項", Sort: 3, ParentId: &auxMid[9].ID},
 		{Key: "material-options.delete", Name: "刪除材質選項", Sort: 4, ParentId: &auxMid[9].ID},
-		// [10] stock-locations
-		{Key: "stock-locations.view", Name: "檢視庫點", Sort: 1, ParentId: &auxMid[10].ID},
-		{Key: "stock-locations.create", Name: "新增庫點", Sort: 2, ParentId: &auxMid[10].ID},
-		{Key: "stock-locations.edit", Name: "編輯庫點", Sort: 3, ParentId: &auxMid[10].ID},
-		{Key: "stock-locations.delete", Name: "刪除庫點", Sort: 4, ParentId: &auxMid[10].ID},
 	}
 	for _, p := range auxLeaf {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&p)
 		db.GetWrite().Model(&Permission{}).Where("key = ?", p.Key).Updates(map[string]interface{}{"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId})
+	}
+
+	// === 頂層：日常作業交易 ===
+	dailyOps := Permission{Key: "daily-operations", Name: "日常作業交易", Sort: 5}
+	db.GetWrite().Where("key = ?", dailyOps.Key).FirstOrCreate(&dailyOps)
+
+	dailyMid := []Permission{
+		{Key: "purchases", Name: "廠商採購作業", Sort: 1, ParentId: &dailyOps.ID},
+		{Key: "purchase-outstanding", Name: "採購未交統計", Sort: 2, ParentId: &dailyOps.ID},
+		{Key: "stocks", Name: "廠商進貨作業", Sort: 3, ParentId: &dailyOps.ID},
+	}
+	for i, p := range dailyMid {
+		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&dailyMid[i])
+		db.GetWrite().Model(&Permission{}).Where("key = ?", p.Key).Updates(map[string]interface{}{
+			"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId,
+		})
+	}
+
+	dailyLeaf := []Permission{
+		{Key: "purchases.view", Name: "檢視採購單", Sort: 1, ParentId: &dailyMid[0].ID},
+		{Key: "purchases.create", Name: "新增採購單", Sort: 2, ParentId: &dailyMid[0].ID},
+		{Key: "purchases.edit", Name: "編輯採購單", Sort: 3, ParentId: &dailyMid[0].ID},
+		{Key: "purchases.delete", Name: "刪除採購單", Sort: 4, ParentId: &dailyMid[0].ID},
+		{Key: "purchase-outstanding.view", Name: "檢視未交統計", Sort: 1, ParentId: &dailyMid[1].ID},
+		{Key: "stocks.view", Name: "檢視進貨單", Sort: 1, ParentId: &dailyMid[2].ID},
+		{Key: "stocks.create", Name: "新增進貨單", Sort: 2, ParentId: &dailyMid[2].ID},
+		{Key: "stocks.edit", Name: "編輯進貨單", Sort: 3, ParentId: &dailyMid[2].ID},
+		{Key: "stocks.delete", Name: "刪除進貨單", Sort: 4, ParentId: &dailyMid[2].ID},
+	}
+	for _, p := range dailyLeaf {
+		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&p)
+		db.GetWrite().Model(&Permission{}).Where("key = ?", p.Key).Updates(map[string]interface{}{
+			"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId,
+		})
 	}
 }
