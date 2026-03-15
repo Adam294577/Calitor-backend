@@ -152,6 +152,7 @@ func RouterRegister(route *gin.Engine) {
 
 		// 主檔 - 商品
 		adminAuth.GET("/products", middlewares.RequirePermission("product-mgmt.view"), controllers.GetProducts)
+		adminAuth.GET("/products/:id", middlewares.RequirePermission("product-mgmt.view"), controllers.GetProduct)
 		adminAuth.POST("/products", middlewares.RequirePermission("product-mgmt.create"), controllers.CreateProduct)
 		adminAuth.PUT("/products/:id", middlewares.RequirePermission("product-mgmt.edit"), controllers.UpdateProduct)
 		adminAuth.DELETE("/products/:id", middlewares.RequirePermission("product-mgmt.delete"), controllers.DeleteProduct)

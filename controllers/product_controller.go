@@ -28,18 +28,48 @@ func GetProducts(c *gin.Context) {
 	paged, total := Paginate(c, query, &models.Product{})
 	paged.
 		Preload("ProductBrand").
+		Preload("ProductVendors.Vendor").
+		Find(&items)
+	resp.Success("成功").SetData(items).SetTotal(total).Send()
+}
+
+func GetProduct(c *gin.Context) {
+	resp := response.New(c)
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		resp.Fail(http.StatusBadRequest, "無效的 ID").Send()
+		return
+	}
+
+	db := models.PostgresNew()
+	defer db.Close()
+
+	var item models.Product
+	err = db.GetRead().
+		Preload("ProductBrand").
 		Preload("Brand").
-		Preload("Size1Group.Options").
-		Preload("Size2Group.Options").
-		Preload("Size3Group.Options").
+		Preload("Size1Group.Options", func(db *gorm.DB) *gorm.DB {
+			return db.Order("sort_order ASC")
+		}).
+		Preload("Size2Group.Options", func(db *gorm.DB) *gorm.DB {
+			return db.Order("sort_order ASC")
+		}).
+		Preload("Size3Group.Options", func(db *gorm.DB) *gorm.DB {
+			return db.Order("sort_order ASC")
+		}).
 		Preload("ProductVendors.Vendor").
 		Preload("CategoryMaps.Category1").
 		Preload("CategoryMaps.Category2").
 		Preload("CategoryMaps.Category3").
 		Preload("CategoryMaps.Category4").
 		Preload("CategoryMaps.Category5").
-		Find(&items)
-	resp.Success("成功").SetData(items).SetTotal(total).Send()
+		Where("id = ?", id).
+		First(&item).Error
+	if err != nil {
+		resp.Fail(http.StatusNotFound, "商品不存在").Send()
+		return
+	}
+	resp.Success("成功").SetData(item).Send()
 }
 
 func CreateProduct(c *gin.Context) {
