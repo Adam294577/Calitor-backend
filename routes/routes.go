@@ -134,12 +134,14 @@ func RouterRegister(route *gin.Engine) {
 
 		// 主檔 - 客戶
 		adminAuth.GET("/customers", middlewares.RequirePermission("customers.view"), controllers.GetCustomers)
+		adminAuth.GET("/customers/options", controllers.GetCustomerOptions)
 		adminAuth.POST("/customers", middlewares.RequirePermission("customers.create"), controllers.CreateCustomer)
 		adminAuth.PUT("/customers/:id", middlewares.RequirePermission("customers.edit"), controllers.UpdateCustomer)
 		adminAuth.DELETE("/customers/:id", middlewares.RequirePermission("customers.delete"), controllers.DeleteCustomer)
 
 		// 主檔 - 廠商
 		adminAuth.GET("/vendors", middlewares.RequirePermission("vendor-mgmt.view"), controllers.GetVendors)
+		adminAuth.GET("/vendors/options", controllers.GetVendorOptions)
 		adminAuth.POST("/vendors", middlewares.RequirePermission("vendor-mgmt.create"), controllers.CreateVendor)
 		adminAuth.PUT("/vendors/:id", middlewares.RequirePermission("vendor-mgmt.edit"), controllers.UpdateVendor)
 		adminAuth.DELETE("/vendors/:id", middlewares.RequirePermission("vendor-mgmt.delete"), controllers.DeleteVendor)

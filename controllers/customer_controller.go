@@ -26,6 +26,27 @@ func GetCustomers(c *gin.Context) {
 	resp.Success("成功").SetData(items).SetTotal(total).Send()
 }
 
+// GetCustomerOptions 客戶下拉選項（輕量版，僅 id/code/name/short_name/branch_code）
+func GetCustomerOptions(c *gin.Context) {
+	resp := response.New(c)
+	db := models.PostgresNew()
+	defer db.Close()
+
+	type option struct {
+		ID         int64  `json:"id"`
+		Code       string `json:"code"`
+		Name       string `json:"name"`
+		ShortName  string `json:"short_name"`
+		BranchCode string `json:"branch_code"`
+	}
+	var items []option
+	db.GetRead().Model(&models.RetailCustomer{}).
+		Select("id, code, name, short_name, branch_code").
+		Order("id ASC").
+		Find(&items)
+	resp.Success("成功").SetData(items).Send()
+}
+
 func CreateCustomer(c *gin.Context) {
 	resp := response.New(c)
 	db := models.PostgresNew()
