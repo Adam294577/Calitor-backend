@@ -13,7 +13,7 @@ type Purchase struct {
 	UpdatedAt        time.Time       `json:"updated_at"`
 	DeletedAt        gorm.DeletedAt  `gorm:"index" json:"deleted_at"`
 	PurchaseNo       string          `gorm:"type:varchar(50);uniqueIndex;not null" json:"purchase_no"`
-	PurchaseDate     string          `gorm:"type:varchar(20);not null" json:"purchase_date"`
+	PurchaseDate     string          `gorm:"type:varchar(20);not null;index" json:"purchase_date"`
 	CustomerID       int64           `gorm:"not null;index" json:"customer_id"`
 	Customer         *RetailCustomer `gorm:"foreignKey:CustomerID" json:"customer,omitempty"`
 	VendorID         int64           `gorm:"not null;index" json:"vendor_id"`

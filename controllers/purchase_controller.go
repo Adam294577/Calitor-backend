@@ -21,8 +21,6 @@ func GetPurchases(c *gin.Context) {
 	query := db.GetRead().
 		Preload("Customer").
 		Preload("Vendor").
-		Preload("FillPerson").
-		Preload("Recorder").
 		Order("purchase_date DESC, id DESC")
 
 	query = ApplySearch(query, c.Query("search"), "purchase_no")
@@ -62,13 +60,10 @@ func GetPurchase(c *gin.Context) {
 
 	var item models.Purchase
 	err = db.GetRead().
-		Preload("Customer").
-		Preload("Vendor").
-		Preload("FillPerson").
-		Preload("Recorder").
 		Preload("Items", func(db *gorm.DB) *gorm.DB {
 			return db.Order("item_order ASC")
 		}).
+		Preload("Items.Product").
 		Preload("Items.Product.Size1Group.Options", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order ASC")
 		}).
@@ -81,7 +76,7 @@ func GetPurchase(c *gin.Context) {
 		Preload("Items.SizeGroup.Options", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order ASC")
 		}).
-		Preload("Items.Sizes.SizeOption").
+		Preload("Items.Sizes").
 		Where("id = ?", id).
 		First(&item).Error
 	if err != nil {
