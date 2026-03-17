@@ -182,6 +182,9 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.PUT("/stocks/:id", middlewares.RequirePermission("stocks.edit"), controllers.UpdateStock)
 		adminAuth.DELETE("/stocks/:id", middlewares.RequirePermission("stocks.delete"), controllers.DeleteStock)
 
+		// 庫存管理 - 庫存查詢
+		adminAuth.GET("/inventory", middlewares.RequirePermission("inventory-query.view"), controllers.GetInventory)
+
 		// 成本轉換公式
 		adminAuth.GET("/cost-formulas", controllers.GetCostFormulas)
 		adminAuth.POST("/cost-formulas/seed", controllers.SeedCostFormulas)

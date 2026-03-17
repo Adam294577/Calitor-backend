@@ -334,4 +334,31 @@ func SeedMasterDataPermissions(db *DBManager) {
 			"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId,
 		})
 	}
+
+	// === 頂層：庫存管理作業 ===
+	inventoryOps := Permission{Key: "inventory-operations", Name: "庫存管理作業", Sort: 6}
+	db.GetWrite().Where("key = ?", inventoryOps.Key).FirstOrCreate(&inventoryOps)
+	db.GetWrite().Model(&Permission{}).Where("key = ?", inventoryOps.Key).Updates(map[string]interface{}{
+		"name": inventoryOps.Name, "sort": inventoryOps.Sort,
+	})
+
+	inventoryMid := []Permission{
+		{Key: "inventory-query", Name: "庫存查詢", Sort: 1, ParentId: &inventoryOps.ID},
+	}
+	for i, p := range inventoryMid {
+		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&inventoryMid[i])
+		db.GetWrite().Model(&Permission{}).Where("key = ?", p.Key).Updates(map[string]interface{}{
+			"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId,
+		})
+	}
+
+	inventoryLeaf := []Permission{
+		{Key: "inventory-query.view", Name: "檢視庫存", Sort: 1, ParentId: &inventoryMid[0].ID},
+	}
+	for _, p := range inventoryLeaf {
+		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&p)
+		db.GetWrite().Model(&Permission{}).Where("key = ?", p.Key).Updates(map[string]interface{}{
+			"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId,
+		})
+	}
 }
