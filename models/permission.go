@@ -309,6 +309,7 @@ func SeedMasterDataPermissions(db *DBManager) {
 		{Key: "purchases", Name: "廠商採購作業", Sort: 1, ParentId: &dailyOps.ID},
 		{Key: "purchase-outstanding", Name: "採購未交統計", Sort: 2, ParentId: &dailyOps.ID},
 		{Key: "stocks", Name: "廠商進貨作業", Sort: 3, ParentId: &dailyOps.ID},
+		{Key: "barcode-print", Name: "條碼列印", Sort: 4, ParentId: &dailyOps.ID},
 	}
 	for i, p := range dailyMid {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&dailyMid[i])
@@ -327,6 +328,7 @@ func SeedMasterDataPermissions(db *DBManager) {
 		{Key: "stocks.create", Name: "新增進貨單", Sort: 2, ParentId: &dailyMid[2].ID},
 		{Key: "stocks.edit", Name: "編輯進貨單", Sort: 3, ParentId: &dailyMid[2].ID},
 		{Key: "stocks.delete", Name: "刪除進貨單", Sort: 4, ParentId: &dailyMid[2].ID},
+		{Key: "barcode-print.view", Name: "檢視條碼列印", Sort: 1, ParentId: &dailyMid[3].ID},
 	}
 	for _, p := range dailyLeaf {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&p)
