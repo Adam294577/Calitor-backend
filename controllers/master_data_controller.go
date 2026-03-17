@@ -629,9 +629,10 @@ func GetCurrencies(c *gin.Context) {
 func CreateCurrency(c *gin.Context) {
 	resp := response.New(c)
 	var req struct {
-		Code     string `json:"code" binding:"required"`
-		Name     string `json:"name" binding:"required"`
-		Symbol   string `json:"symbol"`
+		Code         string  `json:"code" binding:"required"`
+		Name         string  `json:"name" binding:"required"`
+		Symbol       string  `json:"symbol"`
+		ExchangeRate float64 `json:"exchange_rate"`
 		IsActive *bool  `json:"is_active"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -649,7 +650,7 @@ func CreateCurrency(c *gin.Context) {
 		return
 	}
 
-	item := models.Currency{Code: req.Code, Name: req.Name, Symbol: req.Symbol, IsActive: true}
+	item := models.Currency{Code: req.Code, Name: req.Name, Symbol: req.Symbol, ExchangeRate: req.ExchangeRate, IsActive: true}
 	if req.IsActive != nil {
 		item.IsActive = *req.IsActive
 	}
@@ -670,10 +671,11 @@ func UpdateCurrency(c *gin.Context) {
 	}
 
 	var req struct {
-		Code     string `json:"code"`
-		Name     string `json:"name"`
-		Symbol   string `json:"symbol"`
-		IsActive *bool  `json:"is_active"`
+		Code         string   `json:"code"`
+		Name         string   `json:"name"`
+		Symbol       string   `json:"symbol"`
+		ExchangeRate *float64 `json:"exchange_rate"`
+		IsActive     *bool    `json:"is_active"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
@@ -707,6 +709,9 @@ func UpdateCurrency(c *gin.Context) {
 	}
 	if req.Symbol != "" {
 		updates["symbol"] = req.Symbol
+	}
+	if req.ExchangeRate != nil {
+		updates["exchange_rate"] = *req.ExchangeRate
 	}
 	if req.IsActive != nil {
 		updates["is_active"] = *req.IsActive
