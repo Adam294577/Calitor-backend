@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"math"
 	"net/http"
 	"project/models"
 	response "project/services/responses"
@@ -78,29 +79,31 @@ func CreateProduct(c *gin.Context) {
 	defer db.Close()
 
 	var req struct {
-		ModelCode      string  `json:"model_code" binding:"required"`
-		Currency       string  `json:"currency"`
-		NameSpec       string  `json:"name_spec"`
-		MSRP           float64 `json:"msrp"`
-		SpecialPrice   float64 `json:"special_price"`
-		OriginalPrice  float64 `json:"original_price"`
-		BillingBrand   string  `json:"billing_brand"`
-		ProductBrandID *int64  `json:"product_brand_id"`
-		TradeMode      int64   `json:"trade_mode"`
-		IsVisible      bool    `json:"is_visible"`
-		Season         string  `json:"season"`
-		Remark         string  `json:"remark"`
-		MaterialOuter  string  `json:"material_outer"`
-		MaterialInner  string  `json:"material_inner"`
-		ToeCaptrim     string  `json:"toe_cap_trim"`
-		Lining         string  `json:"lining"`
-		Sock           string  `json:"sock"`
-		Sole           string  `json:"sole"`
-		ImageURL       string  `json:"image_url"`
-		Size1GroupID   *int64  `json:"size1_group_id"`
-		Size2GroupID   *int64  `json:"size2_group_id"`
-		Size3GroupID   *int64  `json:"size3_group_id"`
-		CategoryMaps   []struct {
+		ModelCode         string  `json:"model_code" binding:"required"`
+		Currency          string  `json:"currency"`
+		NameSpec          string  `json:"name_spec"`
+		MSRP              float64 `json:"msrp"`
+		SpecialPrice      float64 `json:"special_price"`
+		OriginalPrice     float64 `json:"original_price"`
+		WholesaleTaxIncl  float64 `json:"wholesale_tax_incl"`
+		WholesaleDiscount float64 `json:"wholesale_discount"`
+		BillingBrand      string  `json:"billing_brand"`
+		ProductBrandID    *int64  `json:"product_brand_id"`
+		TradeMode         int64   `json:"trade_mode"`
+		IsVisible         bool    `json:"is_visible"`
+		Season            string  `json:"season"`
+		Remark            string  `json:"remark"`
+		MaterialOuter     string  `json:"material_outer"`
+		MaterialInner     string  `json:"material_inner"`
+		ToeCaptrim        string  `json:"toe_cap_trim"`
+		Lining            string  `json:"lining"`
+		Sock              string  `json:"sock"`
+		Sole              string  `json:"sole"`
+		ImageURL          string  `json:"image_url"`
+		Size1GroupID      *int64  `json:"size1_group_id"`
+		Size2GroupID      *int64  `json:"size2_group_id"`
+		Size3GroupID      *int64  `json:"size3_group_id"`
+		CategoryMaps      []struct {
 			CategoryType int    `json:"category_type"`
 			Category1ID  *int64 `json:"category1_id"`
 			Category2ID  *int64 `json:"category2_id"`
@@ -109,13 +112,11 @@ func CreateProduct(c *gin.Context) {
 			Category5ID  *int64 `json:"category5_id"`
 		} `json:"category_maps"`
 		ProductVendors []struct {
-			VendorID          int64   `json:"vendor_id"`
-			CostDiscount      float64 `json:"cost_discount"`
-			CostStart         float64 `json:"cost_start"`
-			CostLast          float64 `json:"cost_last"`
-			Wholesale         float64 `json:"wholesale"`
-			WholesaleDiscount float64 `json:"wholesale_discount"`
-			IsPrimary         bool    `json:"is_primary"`
+			VendorID     int64   `json:"vendor_id"`
+			CostDiscount float64 `json:"cost_discount"`
+			CostStart    float64 `json:"cost_start"`
+			CostLast     float64 `json:"cost_last"`
+			IsPrimary    bool    `json:"is_primary"`
 		} `json:"product_vendors"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -132,29 +133,32 @@ func CreateProduct(c *gin.Context) {
 
 	now := time.Now()
 	product := models.Product{
-		ModelCode:      req.ModelCode,
-		Currency:       req.Currency,
-		NameSpec:       req.NameSpec,
-		MSRP:           req.MSRP,
-		SpecialPrice:   req.SpecialPrice,
-		OriginalPrice:  req.OriginalPrice,
-		BillingBrand:   req.BillingBrand,
-		ProductBrandId: req.ProductBrandID,
-		TradeMode:      req.TradeMode,
-		IsVisible:      req.IsVisible,
-		Season:         req.Season,
-		Remark:         req.Remark,
-		MaterialOuter:  req.MaterialOuter,
-		MaterialInner:  req.MaterialInner,
-		ToeCapTrim:     req.ToeCaptrim,
-		Lining:         req.Lining,
-		Sock:           req.Sock,
-		Sole:           req.Sole,
-		ImageURL:       req.ImageURL,
-		Size1GroupID:   req.Size1GroupID,
-		Size2GroupID:   req.Size2GroupID,
-		Size3GroupID:   req.Size3GroupID,
-		CreatedOn:      &now,
+		ModelCode:         req.ModelCode,
+		Currency:          req.Currency,
+		NameSpec:          req.NameSpec,
+		MSRP:              req.MSRP,
+		SpecialPrice:      req.SpecialPrice,
+		OriginalPrice:     req.OriginalPrice,
+		WholesaleTaxIncl:  req.WholesaleTaxIncl,
+		Wholesale:         math.Round(req.WholesaleTaxIncl / 1.05),
+		WholesaleDiscount: req.WholesaleDiscount,
+		BillingBrand:      req.BillingBrand,
+		ProductBrandId:    req.ProductBrandID,
+		TradeMode:         req.TradeMode,
+		IsVisible:         req.IsVisible,
+		Season:            req.Season,
+		Remark:            req.Remark,
+		MaterialOuter:     req.MaterialOuter,
+		MaterialInner:     req.MaterialInner,
+		ToeCapTrim:        req.ToeCaptrim,
+		Lining:            req.Lining,
+		Sock:              req.Sock,
+		Sole:              req.Sole,
+		ImageURL:          req.ImageURL,
+		Size1GroupID:      req.Size1GroupID,
+		Size2GroupID:      req.Size2GroupID,
+		Size3GroupID:      req.Size3GroupID,
+		CreatedOn:         &now,
 	}
 
 	err := db.GetWrite().Transaction(func(tx *gorm.DB) error {
@@ -179,14 +183,12 @@ func CreateProduct(c *gin.Context) {
 		// 建立 ProductVendors
 		for _, pv := range req.ProductVendors {
 			item := models.ProductVendor{
-				ProductID:         product.ID,
-				VendorID:          pv.VendorID,
-				CostDiscount:      pv.CostDiscount,
-				CostStart:         pv.CostStart,
-				CostLast:          pv.CostLast,
-				Wholesale:         pv.Wholesale,
-				WholesaleDiscount: pv.WholesaleDiscount,
-				IsPrimary:         pv.IsPrimary,
+				ProductID:    product.ID,
+				VendorID:     pv.VendorID,
+				CostDiscount: pv.CostDiscount,
+				CostStart:    pv.CostStart,
+				CostLast:     pv.CostLast,
+				IsPrimary:    pv.IsPrimary,
 			}
 			if err := tx.Create(&item).Error; err != nil {
 				return err
@@ -253,6 +255,11 @@ func UpdateProduct(c *gin.Context) {
 		if arr, ok := raw.([]interface{}); ok {
 			productVendors = arr
 		}
+	}
+
+	// 含稅批價 → 自動計算未稅批價
+	if v, ok := rawReq["wholesale_tax_incl"].(float64); ok {
+		rawReq["wholesale"] = math.Round(v / 1.05)
 	}
 
 	// 移除不可更新的欄位
@@ -323,12 +330,6 @@ func UpdateProduct(c *gin.Context) {
 				}
 				if v, ok := m["cost_last"].(float64); ok {
 					pv.CostLast = v
-				}
-				if v, ok := m["wholesale"].(float64); ok {
-					pv.Wholesale = v
-				}
-				if v, ok := m["wholesale_discount"].(float64); ok {
-					pv.WholesaleDiscount = v
 				}
 				if v, ok := m["is_primary"].(bool); ok {
 					pv.IsPrimary = v
