@@ -102,35 +102,34 @@ func GetInventory(c *gin.Context) {
 		}
 	}
 
+	// 改用 product_size_stocks 表（進貨加、出貨扣 都已即時更新）
+	where = strings.Replace(where, "s.deleted_at IS NULL AND ", "", 1)
+	where = strings.Replace(where, "s.customer_id", "pss.customer_id", -1)
+
 	sql := fmt.Sprintf(`
 SELECT
-  si.product_id,
+  pss.product_id,
   p.model_code,
-  s.customer_id,
+  pss.customer_id,
   COALESCE(NULLIF(rc.short_name, ''), rc.name, '') as customer_short_name,
   COALESCE(sg.id, 0) as size_group_id,
   COALESCE(sg.code, '') as size_group_code,
   COALESCE(pv.cost_start, 0) as cost_start,
   COALESCE(p.msrp, 0) as msrp,
   COALESCE(TO_CHAR(p.created_on, 'YYYYMMDD'), '') as created_on,
-  sis.size_option_id,
+  pss.size_option_id,
   so.label as size_label,
   so.sort_order,
-  SUM(CASE WHEN s.stock_mode = 1 THEN sis.qty ELSE -sis.qty END) as qty
-FROM stock_item_sizes sis
-JOIN stock_items si ON si.id = sis.stock_item_id
-JOIN stocks s ON s.id = si.stock_id
-JOIN products p ON p.id = si.product_id
-JOIN size_options so ON so.id = sis.size_option_id
-LEFT JOIN size_groups sg ON sg.id = si.size_group_id
+  pss.qty
+FROM product_size_stocks pss
+JOIN products p ON p.id = pss.product_id
+JOIN size_options so ON so.id = pss.size_option_id
+LEFT JOIN size_groups sg ON sg.id = p.size1_group_id
 LEFT JOIN product_vendors pv ON pv.product_id = p.id AND pv.is_primary = true
-LEFT JOIN retail_customers rc ON rc.id = s.customer_id
+LEFT JOIN retail_customers rc ON rc.id = pss.customer_id
 LEFT JOIN product_brands pb ON pb.id = p.product_brand_id
-%s
-GROUP BY si.product_id, p.model_code, s.customer_id, rc.short_name, rc.name,
-         sg.id, sg.code, pv.cost_start, p.msrp, p.created_on,
-         sis.size_option_id, so.label, so.sort_order
-ORDER BY p.model_code, s.customer_id, so.sort_order
+%s AND pss.qty != 0
+ORDER BY p.model_code, pss.customer_id, so.sort_order
 `, where)
 
 	var rawRows []inventoryRawRow

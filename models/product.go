@@ -46,4 +46,5 @@ type Product struct {
 	Size3Group        *SizeGroup           `gorm:"foreignKey:Size3GroupID" json:"size3_group,omitempty"`
 	CategoryMaps      []ProductCategoryMap `gorm:"foreignKey:ProductID" json:"category_maps,omitempty"`   // 分類對應
 	ProductVendors    []ProductVendor      `gorm:"foreignKey:ProductID" json:"product_vendors,omitempty"` // 廠商/價格
+	SizeStocks        []ProductSizeStock   `gorm:"foreignKey:ProductID" json:"size_stocks,omitempty"`     // 庫存
 }

@@ -192,6 +192,7 @@ func AllModels() []interface{} {
 		// 輔助資料
 		&ProductBrand{},
 		&Brand{},
+		&Bank{},
 		&Location{},
 		&TWPostalArea{},
 		&MemberTier{},
@@ -221,10 +222,96 @@ func AllModels() []interface{} {
 		&StockItem{},
 		&StockItemSize{},
 		&CostFormula{},
+		// 客戶訂貨/出貨
+		&Order{},
+		&OrderItem{},
+		&OrderItemSize{},
+		&Shipment{},
+		&ShipmentItem{},
+		&ShipmentItemSize{},
+		// 庫存調整
+		&Modify{},
+		&ModifyItem{},
+		&ModifyItemSize{},
+		// 收款對帳
+		&Gather{},
+		&GatherDetail{},
+		&BankBusiness{},
 	}
 }
 
 // MigrateAll 自動遷移所有資料表
 func MigrateAll(db *DBManager) error {
-	return db.GetWrite().AutoMigrate(AllModels()...)
+	if err := db.GetWrite().AutoMigrate(AllModels()...); err != nil {
+		return err
+	}
+
+	// 一次性重算庫存（清空 product_size_stocks 後從 stock/shipment/modify 重建）
+	if err := db.GetWrite().Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("DELETE FROM product_size_stocks").Error; err != nil {
+			return fmt.Errorf("清空庫存表失敗: %w", err)
+		}
+		// 進貨加庫存
+		if err := tx.Exec(`
+			INSERT INTO product_size_stocks (product_id, customer_id, size_option_id, qty, created_at, updated_at)
+			SELECT si.product_id, s.customer_id, sis.size_option_id,
+				SUM(CASE WHEN s.stock_mode = 1 THEN sis.qty ELSE -sis.qty END),
+				NOW(), NOW()
+			FROM stock_item_sizes sis
+			JOIN stock_items si ON si.id = sis.stock_item_id
+			JOIN stocks s ON s.id = si.stock_id AND s.deleted_at IS NULL
+			GROUP BY si.product_id, s.customer_id, sis.size_option_id
+			ON CONFLICT (product_id, customer_id, size_option_id) DO UPDATE SET qty = product_size_stocks.qty + EXCLUDED.qty
+		`).Error; err != nil {
+			return fmt.Errorf("重建進貨庫存失敗: %w", err)
+		}
+		// 出貨扣庫存
+		if err := tx.Exec(`
+			INSERT INTO product_size_stocks (product_id, customer_id, size_option_id, qty, created_at, updated_at)
+			SELECT si.product_id, rc.id, sis.size_option_id,
+				SUM(CASE WHEN s.shipment_mode = 3 THEN -sis.qty ELSE sis.qty END),
+				NOW(), NOW()
+			FROM shipment_item_sizes sis
+			JOIN shipment_items si ON si.id = sis.shipment_item_id
+			JOIN shipments s ON s.id = si.shipment_id AND s.deleted_at IS NULL
+			JOIN retail_customers rc ON rc.branch_code = s.ship_store AND rc.branch_code != ''
+			GROUP BY si.product_id, rc.id, sis.size_option_id
+			ON CONFLICT (product_id, customer_id, size_option_id) DO UPDATE SET qty = product_size_stocks.qty + EXCLUDED.qty
+		`).Error; err != nil {
+			return fmt.Errorf("重建出貨庫存失敗: %w", err)
+		}
+		// 庫存調整
+		if err := tx.Exec(`
+			INSERT INTO product_size_stocks (product_id, customer_id, size_option_id, qty, created_at, updated_at)
+			SELECT mi.product_id, m.customer_id, mis.size_option_id,
+				SUM(mis.qty),
+				NOW(), NOW()
+			FROM modify_item_sizes mis
+			JOIN modify_items mi ON mi.id = mis.modify_item_id
+			JOIN modifies m ON m.id = mi.modify_id AND m.deleted_at IS NULL
+			GROUP BY mi.product_id, m.customer_id, mis.size_option_id
+			ON CONFLICT (product_id, customer_id, size_option_id) DO UPDATE SET qty = product_size_stocks.qty + EXCLUDED.qty
+		`).Error; err != nil {
+			return fmt.Errorf("重建調整庫存失敗: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("重算庫存失敗: %w", err)
+	}
+
+	// 移除已廢棄的欄位（GORM AutoMigrate 不會自動刪除欄位）
+	dropCols := map[string][]string{
+		"orders":              {"vendor_id", "order_mode", "operation_id"},
+		"shipments":           {"vendor_id", "currency_code", "order_id", "shipment_note", "pay_amount"},
+		"product_size_stocks": {"stock_location_id"},
+	}
+	for table, cols := range dropCols {
+		for _, col := range cols {
+			db.GetWrite().Exec(fmt.Sprintf(
+				"ALTER TABLE %s DROP COLUMN IF EXISTS %s", table, col,
+			))
+		}
+	}
+
+	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"project/models"
 	"project/services/delivery"
+	"project/services/inventory"
 	response "project/services/responses"
 	"strconv"
 
@@ -179,7 +180,7 @@ func CreateStock(c *gin.Context) {
 	noPrefix := prefix + customer.BranchCode + yyyymm
 
 	var maxNo string
-	db.GetRead().Model(&models.Stock{}).
+	db.GetRead().Unscoped().Model(&models.Stock{}).
 		Where("stock_no LIKE ?", noPrefix+"%").
 		Select("MAX(stock_no)").
 		Scan(&maxNo)
@@ -280,6 +281,27 @@ func CreateStock(c *gin.Context) {
 			}
 		}
 
+		// 調整庫存：進貨加、退貨扣
+		multiplier := 1 // 進貨加庫存
+		if req.StockMode == 2 {
+			multiplier = -1 // 退貨扣庫存
+		}
+		var adjustItems []inventory.StockAdjustItem
+		for _, reqItem := range req.Items {
+			var sizes []inventory.StockAdjustSize
+			for _, s := range reqItem.Sizes {
+				if s.Qty > 0 {
+					sizes = append(sizes, inventory.StockAdjustSize{SizeOptionID: s.SizeOptionID, Qty: s.Qty})
+				}
+			}
+			if len(sizes) > 0 {
+				adjustItems = append(adjustItems, inventory.StockAdjustItem{ProductID: reqItem.ProductID, Sizes: sizes})
+			}
+		}
+		if err := inventory.AdjustStockBatch(tx, stock.CustomerID, adjustItems, multiplier); err != nil {
+			return err
+		}
+
 		// 更新關聯採購單交貨狀態
 		if stock.PurchaseID != nil {
 			if err := delivery.UpdateDeliveryStatus(tx, *stock.PurchaseID); err != nil {
@@ -360,6 +382,31 @@ func UpdateStock(c *gin.Context) {
 	oldPurchaseID := existing.PurchaseID
 
 	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
+		// 還原舊庫存
+		oldMultiplier := -1 // 進貨的舊資料要扣回
+		if existing.StockMode == 2 {
+			oldMultiplier = 1 // 退貨的舊資料要加回
+		}
+		var oldItems []models.StockItem
+		tx.Preload("Sizes").Where("stock_id = ?", id).Find(&oldItems)
+		var oldAdjust []inventory.StockAdjustItem
+		for _, oi := range oldItems {
+			var sizes []inventory.StockAdjustSize
+			for _, s := range oi.Sizes {
+				if s.Qty > 0 {
+					sizes = append(sizes, inventory.StockAdjustSize{SizeOptionID: s.SizeOptionID, Qty: s.Qty})
+				}
+			}
+			if len(sizes) > 0 {
+				oldAdjust = append(oldAdjust, inventory.StockAdjustItem{ProductID: oi.ProductID, Sizes: sizes})
+			}
+		}
+		if len(oldAdjust) > 0 {
+			if err := inventory.AdjustStockBatch(tx, existing.CustomerID, oldAdjust, oldMultiplier); err != nil {
+				return err
+			}
+		}
+
 		// 刪除舊的 Sizes 和 Items
 		var oldItemIDs []int64
 		tx.Model(&models.StockItem{}).Where("stock_id = ?", id).Pluck("id", &oldItemIDs)
@@ -439,13 +486,33 @@ func UpdateStock(c *gin.Context) {
 			}
 		}
 
+		// 加入新庫存
+		newMultiplier := 1
+		if req.StockMode == 2 {
+			newMultiplier = -1
+		}
+		var newAdjust []inventory.StockAdjustItem
+		for _, reqItem := range req.Items {
+			var sizes []inventory.StockAdjustSize
+			for _, s := range reqItem.Sizes {
+				if s.Qty > 0 {
+					sizes = append(sizes, inventory.StockAdjustSize{SizeOptionID: s.SizeOptionID, Qty: s.Qty})
+				}
+			}
+			if len(sizes) > 0 {
+				newAdjust = append(newAdjust, inventory.StockAdjustItem{ProductID: reqItem.ProductID, Sizes: sizes})
+			}
+		}
+		if err := inventory.AdjustStockBatch(tx, req.CustomerID, newAdjust, newMultiplier); err != nil {
+			return err
+		}
+
 		// 更新關聯採購單交貨狀態
 		if req.PurchaseID != nil {
 			if err := delivery.UpdateDeliveryStatus(tx, *req.PurchaseID); err != nil {
 				return err
 			}
 		}
-		// 如果舊的採購單跟新的不同，也要更新舊的
 		if oldPurchaseID != nil && (req.PurchaseID == nil || *oldPurchaseID != *req.PurchaseID) {
 			if err := delivery.UpdateDeliveryStatus(tx, *oldPurchaseID); err != nil {
 				return err
