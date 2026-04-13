@@ -58,12 +58,13 @@ func GetPurchaseOutstanding(c *gin.Context) {
 	query.Preload("Vendor").
 		Preload("Items.Sizes.SizeOption").
 		Preload("Items.Product").
-		Preload("Items.SizeGroup.Options").
+		Preload("Items.SizeGroup").
 		Find(&purchases)
 
 	if len(purchases) == 0 {
 		resp.Success("成功").SetData(map[string]interface{}{
-			"size_columns": []outstandingSizeCol{},
+			"size_groups":  []outstandingSizeGroup{},
+			"max_columns":  0,
 			"rows":         []outstandingRow{},
 			"footer":       map[string]interface{}{"sizes": map[string]int{}, "total_qty": 0, "total_amount": 0},
 		}).Send()
@@ -81,15 +82,46 @@ func GetPurchaseOutstanding(c *gin.Context) {
 	// 3. 查已進貨量
 	delivered := delivery.DeliveredQtyMap(db.GetRead(), allItemIDs)
 
-	// 4. 計算未交量，收集 SizeOption
-	type sizeOptionInfo struct {
-		ID        int64
-		Label     string
-		SortOrder int
+	// 4. 查詢所有 SizeGroup + Options，建立 sizeOption → position 對照
+	type sizeGroupInfo struct {
+		Code    string
+		Name    string
+		Options []outstandingSizeGroupOpt
 	}
-	sizeOptionMap := map[int64]sizeOptionInfo{}
+	allSizeGroupMap := map[string]*sizeGroupInfo{}
+	sizeOptionToPos := map[int64]int{}
 
-	// detail rows: 每個 PurchaseItem 一列
+	type sgOptRow struct {
+		SgCode    string `gorm:"column:sg_code"`
+		SgName    string `gorm:"column:sg_name"`
+		OptID     int64  `gorm:"column:opt_id"`
+		OptLabel  string `gorm:"column:opt_label"`
+		SortOrder int    `gorm:"column:sort_order"`
+	}
+	var sgOptRows []sgOptRow
+	db.GetRead().Raw(`
+		SELECT sg.code as sg_code, sg.name as sg_name,
+		       so.id as opt_id, so.label as opt_label, so.sort_order
+		FROM size_groups sg
+		JOIN size_options so ON so.size_group_id = sg.id
+		WHERE sg.deleted_at IS NULL
+		ORDER BY sg.code, so.sort_order
+	`).Scan(&sgOptRows)
+
+	for _, r := range sgOptRows {
+		sg, exists := allSizeGroupMap[r.SgCode]
+		if !exists {
+			sg = &sizeGroupInfo{Code: r.SgCode, Name: r.SgName}
+			allSizeGroupMap[r.SgCode] = sg
+		}
+		pos := len(sg.Options) + 1
+		sg.Options = append(sg.Options, outstandingSizeGroupOpt{
+			ID: r.OptID, Label: r.OptLabel, SortOrder: r.SortOrder,
+		})
+		sizeOptionToPos[r.OptID] = pos
+	}
+
+	// detail rows
 	type detailEntry struct {
 		purchaseNo    string
 		vendorName    string
@@ -120,19 +152,6 @@ func GetPurchaseOutstanding(c *gin.Context) {
 				sizeGroupCode = item.SizeGroup.Code
 			}
 
-			// 收集該 item 的 SizeOption 資訊
-			if item.SizeGroup != nil {
-				for _, opt := range item.SizeGroup.Options {
-					if _, exists := sizeOptionMap[opt.ID]; !exists {
-						sizeOptionMap[opt.ID] = sizeOptionInfo{
-							ID:        opt.ID,
-							Label:     opt.Label,
-							SortOrder: opt.SortOrder,
-						}
-					}
-				}
-			}
-
 			sizes := map[string]int{}
 			itemTotalQty := 0
 
@@ -143,20 +162,13 @@ func GetPurchaseOutstanding(c *gin.Context) {
 				if outstanding <= 0 {
 					continue
 				}
-				sizeKey := strconv.FormatInt(sz.SizeOptionID, 10)
-				sizes[sizeKey] = outstanding
-				itemTotalQty += outstanding
-
-				// 確保 sizeOption 資訊被收集
-				if sz.SizeOption != nil {
-					if _, exists := sizeOptionMap[sz.SizeOptionID]; !exists {
-						sizeOptionMap[sz.SizeOptionID] = sizeOptionInfo{
-							ID:        sz.SizeOption.ID,
-							Label:     sz.SizeOption.Label,
-							SortOrder: sz.SizeOption.SortOrder,
-						}
-					}
+				pos := sizeOptionToPos[sz.SizeOptionID]
+				if pos == 0 {
+					continue
 				}
+				posKey := strconv.Itoa(pos)
+				sizes[posKey] = outstanding
+				itemTotalQty += outstanding
 			}
 
 			if itemTotalQty == 0 {
@@ -175,27 +187,30 @@ func GetPurchaseOutstanding(c *gin.Context) {
 		}
 	}
 
-	// 5. 建立 size_columns
-	var sizeColumns []outstandingSizeCol
-	for _, info := range sizeOptionMap {
-		sizeColumns = append(sizeColumns, outstandingSizeCol{
-			ID:        info.ID,
-			Label:     info.Label,
-			SortOrder: info.SortOrder,
-		})
+	// 5. 建立 size_groups + max_columns
+	sizeGroups := make([]outstandingSizeGroup, 0, len(allSizeGroupMap))
+	maxColumns := 0
+	sgCodes := make([]string, 0, len(allSizeGroupMap))
+	for code := range allSizeGroupMap {
+		sgCodes = append(sgCodes, code)
 	}
-	sort.Slice(sizeColumns, func(i, j int) bool {
-		if sizeColumns[i].SortOrder != sizeColumns[j].SortOrder {
-			return sizeColumns[i].SortOrder < sizeColumns[j].SortOrder
+	sort.Strings(sgCodes)
+	for _, code := range sgCodes {
+		sg := allSizeGroupMap[code]
+		sizeGroups = append(sizeGroups, outstandingSizeGroup{
+			Code:    sg.Code,
+			Name:    sg.Name,
+			Options: sg.Options,
+		})
+		if len(sg.Options) > maxColumns {
+			maxColumns = len(sg.Options)
 		}
-		return sizeColumns[i].ID < sizeColumns[j].ID
-	})
+	}
 
 	// 6. 組裝 rows
 	var rows []outstandingRow
 
 	if tab == "detail" {
-		// detail 模式：每個 PurchaseItem 獨立一列
 		for _, d := range details {
 			subLabel := fmt.Sprintf("#%s(%s)", d.vendorName, d.purchaseNo)
 			rows = append(rows, outstandingRow{
@@ -208,7 +223,6 @@ func GetPurchaseOutstanding(c *gin.Context) {
 			})
 		}
 	} else {
-		// summary 模式：依 group_by 聚合
 		type aggEntry struct {
 			groupLabel    string
 			sizeGroupCode string
@@ -224,7 +238,7 @@ func GetPurchaseOutstanding(c *gin.Context) {
 			switch groupBy {
 			case "vendor":
 				groupKey = d.vendorName
-			default: // model
+			default:
 				groupKey = d.modelCode
 			}
 
@@ -271,7 +285,8 @@ func GetPurchaseOutstanding(c *gin.Context) {
 	}
 
 	resp.Success("成功").SetData(map[string]interface{}{
-		"size_columns": sizeColumns,
+		"size_groups":  sizeGroups,
+		"max_columns":  maxColumns,
 		"rows":         rows,
 		"footer": map[string]interface{}{
 			"sizes":        footerSizes,
