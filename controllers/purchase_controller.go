@@ -145,7 +145,7 @@ func CreatePurchase(c *gin.Context) {
 	prefix := vendor.Code + customer.BranchCode + yyyymm
 
 	var maxNo string
-	db.GetRead().Model(&models.Purchase{}).
+	db.GetRead().Unscoped().Model(&models.Purchase{}).
 		Where("purchase_no LIKE ?", prefix+"%").
 		Select("MAX(purchase_no)").
 		Scan(&maxNo)
@@ -391,10 +391,20 @@ func SearchProducts(c *gin.Context) {
 
 	search := c.Query("search")
 	vendorID := c.Query("vendor_id")
+	brandID := c.Query("brand_id")
+	customerID := c.Query("customer_id")
+	storeCode := c.Query("store_code")
 
 	query := db.GetRead().Order("id ASC")
 	if vendorID != "" {
 		query = query.Where("id IN (SELECT product_id FROM product_vendors WHERE vendor_id = ?)", vendorID)
+	}
+	if brandID != "" {
+		query = query.Where("brand_id = ?", brandID)
+	}
+	if customerID != "" && vendorID == "" && brandID == "" {
+		// 出貨用：依客戶的訂貨明細找商品
+		query = query.Where("id IN (SELECT DISTINCT oi.product_id FROM order_items oi JOIN orders o ON o.id = oi.order_id AND o.deleted_at IS NULL WHERE o.customer_id = ?)", customerID)
 	}
 	if search != "" {
 		like := "%" + search + "%"
@@ -422,8 +432,48 @@ func SearchProducts(c *gin.Context) {
 			}
 			return db
 		}).
+		Preload("SizeStocks", func(db *gorm.DB) *gorm.DB {
+			if storeCode != "" {
+				return db.Where("customer_id IN (SELECT id FROM retail_customers WHERE branch_code = ?)", storeCode)
+			}
+			if customerID != "" {
+				return db.Where("customer_id = ?", customerID)
+			}
+			return db
+		}).
 		Limit(20).
 		Find(&items)
+
+	// 出貨用：回傳該客戶的訂貨明細（最近一筆未完成的訂貨），方便帶入售價/數量
+	if customerID != "" {
+		var productIDs []int64
+		for _, p := range items {
+			productIDs = append(productIDs, p.ID)
+		}
+		if len(productIDs) > 0 {
+			var orderItems []models.OrderItem
+			db.GetRead().
+				Preload("Sizes").
+				Joins("JOIN orders ON orders.id = order_items.order_id AND orders.deleted_at IS NULL AND orders.customer_id = ?", customerID).
+				Where("order_items.product_id IN ?", productIDs).
+				Order("orders.order_date DESC, order_items.id DESC").
+				Find(&orderItems)
+
+			// 每個 product 取最新一筆 orderItem
+			orderItemMap := map[int64]models.OrderItem{}
+			for _, oi := range orderItems {
+				if _, exists := orderItemMap[oi.ProductID]; !exists {
+					orderItemMap[oi.ProductID] = oi
+				}
+			}
+
+			resp.Success("成功").SetData(map[string]interface{}{
+				"products":    items,
+				"order_items": orderItemMap,
+			}).Send()
+			return
+		}
+	}
 
 	resp.Success("成功").SetData(items).Send()
 }
