@@ -103,6 +103,7 @@ func App(HttpServer *gin.Engine) {
 		}
 		models.SeedPermissionsAndRoles(db)
 		models.SeedDefaultAdmin(db)
+		models.SeedBanks(db)
 	} else {
 		fmt.Println("⏭ 略過資料表遷移與 Seed（設定 RUN_MIGRATE=true 以啟用）")
 	}
