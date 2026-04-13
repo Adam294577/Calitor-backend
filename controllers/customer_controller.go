@@ -26,22 +26,23 @@ func GetCustomers(c *gin.Context) {
 	resp.Success("成功").SetData(items).SetTotal(total).Send()
 }
 
-// GetCustomerOptions 客戶下拉選項（輕量版，僅 id/code/name/short_name/branch_code）
+// GetCustomerOptions 客戶下拉選項（輕量版，僅 id/code/name/short_name/branch_code/closing_date）
 func GetCustomerOptions(c *gin.Context) {
 	resp := response.New(c)
 	db := models.PostgresNew()
 	defer db.Close()
 
 	type option struct {
-		ID         int64  `json:"id"`
-		Code       string `json:"code"`
-		Name       string `json:"name"`
-		ShortName  string `json:"short_name"`
-		BranchCode string `json:"branch_code"`
+		ID          int64  `json:"id"`
+		Code        string `json:"code"`
+		Name        string `json:"name"`
+		ShortName   string `json:"short_name"`
+		BranchCode  string `json:"branch_code"`
+		ClosingDate int    `json:"closing_date"`
 	}
 	var items []option
 	db.GetRead().Model(&models.RetailCustomer{}).
-		Select("id, code, name, short_name, branch_code").
+		Select("id, code, name, short_name, branch_code, closing_date").
 		Order("id ASC").
 		Find(&items)
 	resp.Success("成功").SetData(items).Send()
@@ -58,8 +59,8 @@ func CreateCustomer(c *gin.Context) {
 		return
 	}
 
-	if item.Code == "" || item.Name == "" {
-		resp.Fail(http.StatusBadRequest, "客戶代號和名稱為必填").Send()
+	if item.Code == "" || item.Name == "" || item.BranchCode == "" {
+		resp.Fail(http.StatusBadRequest, "客戶代號、名稱和貨點代碼為必填").Send()
 		return
 	}
 
@@ -128,6 +129,12 @@ func UpdateCustomer(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
+		return
+	}
+
+	// 不允許將貨點代碼清空
+	if req.BranchCode != nil && *req.BranchCode == "" {
+		resp.Fail(http.StatusBadRequest, "貨點代碼不可為空").Send()
 		return
 	}
 
