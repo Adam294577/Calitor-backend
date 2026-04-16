@@ -3,6 +3,7 @@ package controllers
 import (
 	"math"
 	"project/models"
+	"project/services/receivable"
 	response "project/services/responses"
 	"strconv"
 	"time"
@@ -198,11 +199,15 @@ func GetReceivables(c *gin.Context) {
 			label = "退貨"
 		}
 
-		tradeAmount := s.DealAmount - s.TaxAmount + s.DiscountAmount
 		agg := gatherMap[s.ID]
-
-		// 未收 = 應收 - 已收 - 折讓 - 其他扣額
-		outstanding := s.DealAmount - s.ChargeAmount - agg.TotalAllowance - agg.TotalOther
+		tradeAmount := receivable.RoundAmount(s.DealAmount - s.TaxAmount + s.DiscountAmount)
+		taxAmount := receivable.RoundAmount(s.TaxAmount)
+		discountAmount := receivable.RoundAmount(s.DiscountAmount)
+		dealAmount := receivable.RoundAmount(s.DealAmount)
+		chargeAmount := receivable.RoundAmount(s.ChargeAmount)
+		allowance := receivable.RoundAmount(agg.TotalAllowance)
+		otherDeduct := receivable.RoundAmount(agg.TotalOther)
+		outstanding := receivable.Outstanding(s.DealAmount, s.ChargeAmount, agg.TotalAllowance, agg.TotalOther)
 
 		// unpaid 模式：跳過已收齊的
 		if displayMode == "unpaid" && outstanding == 0 {
@@ -216,12 +221,12 @@ func GetReceivables(c *gin.Context) {
 			ShipmentDate:      s.ShipmentDate,
 			ShipmentNo:        s.ShipmentNo,
 			TradeAmount:       tradeAmount,
-			TaxAmount:         s.TaxAmount,
-			DiscountAmount:    s.DiscountAmount,
-			DealAmount:        s.DealAmount,
-			AllowanceAmount:   agg.TotalAllowance,
-			OtherDeduct:       agg.TotalOther,
-			ChargeAmount:      s.ChargeAmount,
+			TaxAmount:         taxAmount,
+			DiscountAmount:    discountAmount,
+			DealAmount:        dealAmount,
+			AllowanceAmount:   allowance,
+			OtherDeduct:       otherDeduct,
+			ChargeAmount:      chargeAmount,
 			TotalQty:          qtyMap[s.ID],
 			Remark:            s.Remark,
 		}
@@ -231,12 +236,12 @@ func GetReceivables(c *gin.Context) {
 		rows = append(rows, row)
 
 		footer.TradeAmountTotal += tradeAmount
-		footer.TaxAmountTotal += s.TaxAmount
-		footer.DiscountAmountTotal += s.DiscountAmount
-		footer.DealAmountTotal += s.DealAmount
-		footer.ChargeAmountTotal += s.ChargeAmount
-		footer.AllowanceTotal += agg.TotalAllowance
-		footer.OtherDeductTotal += agg.TotalOther
+		footer.TaxAmountTotal += taxAmount
+		footer.DiscountAmountTotal += discountAmount
+		footer.DealAmountTotal += dealAmount
+		footer.ChargeAmountTotal += chargeAmount
+		footer.AllowanceTotal += allowance
+		footer.OtherDeductTotal += otherDeduct
 	}
 
 	footer.OutstandingTotal = footer.DealAmountTotal - footer.ChargeAmountTotal - footer.AllowanceTotal - footer.OtherDeductTotal
@@ -247,20 +252,9 @@ func GetReceivables(c *gin.Context) {
 
 		var balance float64
 		db.GetRead().Raw(`
-			SELECT COALESCE(SUM(
-				s.deal_amount - s.charge_amount
-				- COALESCE(gd_agg.total_allowance, 0)
-				- COALESCE(gd_agg.total_other, 0)
-			), 0)
+			SELECT COALESCE(SUM(`+receivable.OutstandingRoundedExpr+`), 0)
 			FROM shipments s
-			LEFT JOIN (
-				SELECT gd.shipment_id,
-					SUM(gd.discount_amount) as total_allowance,
-					SUM(gd.other_deduct) as total_other
-				FROM gather_details gd
-				JOIN gathers g ON g.id = gd.gather_id AND g.deleted_at IS NULL
-				GROUP BY gd.shipment_id
-			) gd_agg ON gd_agg.shipment_id = s.id
+			`+receivable.GatherDetailsAggJoin+`
 			WHERE s.customer_id = ?
 				AND s.close_month < ?
 				AND s.close_month != ''
@@ -273,7 +267,7 @@ func GetReceivables(c *gin.Context) {
 			return ""
 		}(), cid, closeMonthFrom).Scan(&balance)
 
-		balance = math.Round(balance*100) / 100
+		balance = receivable.RoundAmount(balance)
 		if balance > 0 {
 			footer.OpeningBalance = balance
 		} else if balance < 0 {
@@ -304,7 +298,7 @@ func GetReceivables(c *gin.Context) {
 			Where("customer_id = ?", cid).
 			Select("COALESCE(SUM(prepaid_credit_used), 0)").Scan(&totalUsed)
 
-		gatherPrepaid := math.Round((totalReceived-totalApplied-totalUsed)*100) / 100
+		gatherPrepaid := receivable.RoundAmount(totalReceived - totalApplied - totalUsed)
 		if gatherPrepaid > 0 {
 			footer.PrepaidAmount += gatherPrepaid
 		}
@@ -358,14 +352,14 @@ func GetReceivableAging(c *gin.Context) {
 
 	baseMonth := c.Query("base_month")
 	if len(baseMonth) != 6 {
-		resp.Fail("base_month 格式錯誤，應為 YYYYMM").Send()
+		resp.Fail(400, "base_month 格式錯誤，應為 YYYYMM").Send()
 		return
 	}
 
 	// 1. 計算 6 個月份字串（由新到舊）：[base, base-1, ..., base-5]
 	t, err := time.Parse("200601", baseMonth)
 	if err != nil {
-		resp.Fail("base_month 無法解析").Send()
+		resp.Fail(400, "base_month 無法解析").Send()
 		return
 	}
 	months := make([]string, 6)
@@ -386,23 +380,9 @@ func GetReceivableAging(c *gin.Context) {
 	}
 	var aggs []aggRow
 	db.GetRead().Raw(`
-		SELECT s.customer_id,
-			s.close_month,
-			SUM(
-				s.deal_amount
-				- s.charge_amount
-				- COALESCE(gd.total_allowance, 0)
-				- COALESCE(gd.total_other, 0)
-			) AS amount
+		SELECT s.customer_id, s.close_month, SUM(`+receivable.OutstandingRoundedExpr+`) AS amount
 		FROM shipments s
-		LEFT JOIN (
-			SELECT gd.shipment_id,
-				SUM(gd.discount_amount) AS total_allowance,
-				SUM(gd.other_deduct)    AS total_other
-			FROM gather_details gd
-			JOIN gathers g ON g.id = gd.gather_id AND g.deleted_at IS NULL
-			GROUP BY gd.shipment_id
-		) gd ON gd.shipment_id = s.id
+		`+receivable.GatherDetailsAggJoin+`
 		WHERE s.deleted_at IS NULL
 			AND s.close_month <> ''
 			AND s.close_month <= ?
@@ -420,7 +400,7 @@ func GetReceivableAging(c *gin.Context) {
 			}
 			rowMap[a.CustomerID] = row
 		}
-		amt := math.Round(a.Amount*100) / 100
+		amt := receivable.RoundAmount(a.Amount)
 		if idx, isRecent := monthIndex[a.CloseMonth]; isRecent {
 			row.MonthAmounts[idx] += amt
 		} else if a.CloseMonth < earliestMonth {
@@ -436,7 +416,7 @@ func GetReceivableAging(c *gin.Context) {
 		for _, v := range row.MonthAmounts {
 			total += v
 		}
-		row.Total = math.Round(total*100) / 100
+		row.Total = receivable.RoundAmount(total)
 		if row.Total == 0 {
 			continue
 		}
@@ -474,7 +454,7 @@ func GetReceivableAging(c *gin.Context) {
 	for _, row := range filtered {
 		grandTotal += row.Total
 	}
-	grandTotal = math.Round(grandTotal*100) / 100
+	grandTotal = receivable.RoundAmount(grandTotal)
 
 	resp.Success("成功").SetData(gin.H{
 		"base_month":  baseMonth,

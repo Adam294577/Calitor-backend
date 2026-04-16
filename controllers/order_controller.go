@@ -19,21 +19,22 @@ func GetOrders(c *gin.Context) {
 
 	var items []models.Order
 	query := db.GetRead().
+		Select("orders.*").
 		Joins("JOIN retail_customers ON retail_customers.id = orders.customer_id AND retail_customers.is_visible = true").
 		Preload("Customer").
 		Preload("Brand").
-		Order("order_date DESC, id DESC")
+		Order("orders.order_date DESC, orders.id DESC")
 
 	query = ApplySearch(query, c.Query("search"), "order_no")
 
 	if v := c.Query("customer_id"); v != "" {
-		query = query.Where("customer_id = ?", v)
+		query = query.Where("orders.customer_id = ?", v)
 	}
 	if v := c.Query("date_from"); v != "" {
-		query = query.Where("order_date >= ?", v)
+		query = query.Where("orders.order_date >= ?", v)
 	}
 	if v := c.Query("date_to"); v != "" {
-		query = query.Where("order_date <= ?", v)
+		query = query.Where("orders.order_date <= ?", v)
 	}
 	if v := c.Query("delivery_status"); v != "" {
 		query = query.Where("delivery_status = ?", v)

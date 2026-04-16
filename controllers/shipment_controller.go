@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"project/models"
 	"project/services/inventory"
+	"project/services/receivable"
 	response "project/services/responses"
 	"sort"
 	"strconv"
@@ -23,26 +24,27 @@ func GetShipments(c *gin.Context) {
 
 	var items []models.Shipment
 	query := db.GetRead().
+		Select("shipments.*").
 		Joins("JOIN retail_customers ON retail_customers.id = shipments.customer_id AND retail_customers.is_visible = true").
 		Preload("Customer").
 		Preload("FillPerson").
 		Preload("Recorder").
-		Order("shipment_date DESC, id DESC")
+		Order("shipments.shipment_date DESC, shipments.id DESC")
 
 	if v := c.Query("search"); v != "" {
 		query = ApplySearch(query, v, "shipment_no")
 	}
 	if v := c.Query("customer_id"); v != "" {
-		query = query.Where("customer_id = ?", v)
+		query = query.Where("shipments.customer_id = ?", v)
 	}
 	if v := c.Query("date_from"); v != "" {
-		query = query.Where("shipment_date >= ?", v)
+		query = query.Where("shipments.shipment_date >= ?", v)
 	}
 	if v := c.Query("date_to"); v != "" {
-		query = query.Where("shipment_date <= ?", v)
+		query = query.Where("shipments.shipment_date <= ?", v)
 	}
 	if v := c.Query("shipment_mode"); v != "" {
-		query = query.Where("shipment_mode = ?", v)
+		query = query.Where("shipments.shipment_mode = ?", v)
 	}
 
 	paged, total := Paginate(c, query, &models.Shipment{})
@@ -235,13 +237,9 @@ func CreateShipment(c *gin.Context) {
 					var unclearedCount int64
 					db.GetRead().Raw(`
 						SELECT COUNT(*) FROM shipments s
+						`+receivable.GatherDetailsAggJoin+`
 						WHERE s.customer_id = ? AND s.deleted_at IS NULL AND s.shipment_mode = 3 AND s.close_month <= ?
-						AND s.deal_amount - s.charge_amount - COALESCE((
-							SELECT SUM(gd.discount_amount + gd.other_deduct)
-							FROM gather_details gd
-							JOIN gathers g ON g.id = gd.gather_id AND g.deleted_at IS NULL
-							WHERE gd.shipment_id = s.id
-						), 0) > 0
+						AND (`+receivable.OutstandingRoundedExpr+`) > 0
 					`, req.CustomerID, cutoffMonth).Scan(&unclearedCount)
 					if unclearedCount > 0 {
 						resp.Fail(http.StatusBadRequest, fmt.Sprintf("%s 月以前尚有 %d 筆未繳清出貨單，請先完成沖帳", cutoffMonth, unclearedCount)).Send()

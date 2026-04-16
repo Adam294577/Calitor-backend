@@ -66,14 +66,15 @@ func GetOrderOutstanding(c *gin.Context) {
 
 	// 1. 查 orders WHERE delivery_status < 2，排除隱藏客戶
 	query := db.GetRead().Model(&models.Order{}).
+		Select("orders.*").
 		Joins("JOIN retail_customers ON retail_customers.id = orders.customer_id AND retail_customers.is_visible = true").
-		Where("delivery_status < 2")
+		Where("orders.delivery_status < 2")
 
 	if dateFrom != "" {
-		query = query.Where("order_date >= ?", dateFrom)
+		query = query.Where("orders.order_date >= ?", dateFrom)
 	}
 	if dateTo != "" {
-		query = query.Where("order_date <= ?", dateTo)
+		query = query.Where("orders.order_date <= ?", dateTo)
 	}
 	if len(customerIDs) > 0 {
 		var cids []int64
@@ -83,7 +84,7 @@ func GetOrderOutstanding(c *gin.Context) {
 			}
 		}
 		if len(cids) > 0 {
-			query = query.Where("customer_id IN (?)", cids)
+			query = query.Where("orders.customer_id IN (?)", cids)
 		}
 	}
 	// model_code 和 expected_date 需要在 Items 層級過濾，後面處理

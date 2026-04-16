@@ -20,11 +20,12 @@ func GetRetailSells(c *gin.Context) {
 
 	var items []models.RetailSell
 	query := db.GetRead().
+		Select("retail_sells.*").
 		Joins("JOIN retail_customers ON retail_customers.id = retail_sells.customer_id AND retail_customers.is_visible = true").
 		Preload("Customer").
 		Preload("SellPerson").
 		Preload("Recorder").
-		Order("sell_date DESC, id DESC")
+		Order("retail_sells.sell_date DESC, retail_sells.id DESC")
 
 	if v := c.Query("search"); v != "" {
 		query = ApplySearch(query, v, "sell_no")
@@ -115,7 +116,11 @@ func GetRetailSell(c *gin.Context) {
 	}
 	err = query.Where("id = ?", id).First(&item).Error
 	if err != nil {
-		resp.Fail(http.StatusNotFound, "銷售單不存在").Send()
+		if err == gorm.ErrRecordNotFound {
+			resp.Fail(http.StatusNotFound, "銷售單不存在").Send()
+			return
+		}
+		resp.Panic(err).Send()
 		return
 	}
 

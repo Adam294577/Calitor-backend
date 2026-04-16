@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -54,13 +55,18 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 	where := "WHERE p.deleted_at IS NULL AND p.is_visible = true"
 	args := []interface{}{}
 
-	if v := c.Query("model_code_from"); v != "" {
-		where += " AND p.model_code >= ?"
-		args = append(args, v)
+	if v := c.Query("model_code"); v != "" {
+		where += " AND p.model_code ILIKE ?"
+		args = append(args, "%"+v+"%")
 	}
-	if v := c.Query("model_code_to"); v != "" {
-		where += " AND p.model_code <= ?"
-		args = append(args, v)
+	if v := c.Query("brand_ids"); v != "" {
+		ids := splitNonEmpty(v)
+		if len(ids) > 0 {
+			where += " AND p.brand_id IN (" + placeholders(len(ids)) + ")"
+			for _, id := range ids {
+				args = append(args, id)
+			}
+		}
 	}
 	if v := c.Query("name_spec"); v != "" {
 		where += " AND p.name_spec ILIKE ?"
@@ -94,7 +100,7 @@ LEFT JOIN size_groups sg ON sg.id = p.size1_group_id
 LEFT JOIN product_vendors pv ON pv.product_id = p.id AND pv.is_primary = true
 LEFT JOIN vendors v ON v.id = pv.vendor_id
 %s
-ORDER BY p.model_code
+ORDER BY p.created_on DESC NULLS LAST, p.model_code
 LIMIT 500
 `, where)
 
@@ -149,6 +155,14 @@ func GetProductInOutSummaryDetail(c *gin.Context) {
 	branchIDs := splitNonEmpty(c.Query("branch_ids"))
 	txDateFrom := c.Query("tx_date_from")
 	txDateTo := c.Query("tx_date_to")
+	// 計算當日庫存數量未勾＝排除當日：將 txDateTo 上限改為昨天
+	if c.Query("exclude_today") == "1" {
+		loc, _ := time.LoadLocation("Asia/Taipei")
+		yesterday := time.Now().In(loc).AddDate(0, 0, -1).Format("20060102")
+		if txDateTo == "" || txDateTo > yesterday {
+			txDateTo = yesterday
+		}
+	}
 	kinds := splitNonEmpty(c.Query("kinds"))
 	if len(kinds) == 0 {
 		// 預設全部
@@ -220,7 +234,7 @@ func GetProductInOutSummaryDetail(c *gin.Context) {
 		allRows = append(allRows, rows...)
 	}
 	if kindSet["order"] {
-		rows, err := queryOrderRows(db, productID, branchIDs, txDateFrom, txDateTo)
+		rows, err := queryOrderRows(db, productID, branchCodes, branchIDs, txDateFrom, txDateTo)
 		if err != nil {
 			resp.Panic(err).Send()
 			return
@@ -393,9 +407,9 @@ SELECT
   s.shipment_no AS doc_no,
   s.shipment_date AS doc_date,
   COALESCE(s.ship_store, '') AS branch_code,
-  COALESCE(NULLIF(rc.short_name, ''), rc.name, '') AS branch_name,
+  COALESCE(NULLIF(branch.short_name, ''), branch.name, '') AS branch_name,
   COALESCE(si.ship_price, 0) AS unit_price,
-  '' AS vendor_name,
+  COALESCE(NULLIF(rc.short_name, ''), rc.name, '') AS vendor_name,
   TO_CHAR(s.updated_at AT TIME ZONE 'Asia/Taipei', 'YYYYMMDD') AS updated_at,
   COALESCE(a.account, '') AS modified_by,
   COALESCE(sis.size_option_id, 0) AS size_option_id,
@@ -403,6 +417,10 @@ SELECT
 FROM shipments s
 JOIN shipment_items si ON si.shipment_id = s.id
 LEFT JOIN shipment_item_sizes sis ON sis.shipment_item_id = si.id
+LEFT JOIN LATERAL (
+  SELECT short_name, name FROM retail_customers
+  WHERE branch_code = s.ship_store AND deleted_at IS NULL LIMIT 1
+) branch ON TRUE
 LEFT JOIN retail_customers rc ON rc.id = s.customer_id
 LEFT JOIN admins a ON a.id = s.recorder_id
 %s
@@ -450,9 +468,9 @@ SELECT
   s.sell_no AS doc_no,
   s.sell_date AS doc_date,
   COALESCE(s.sell_store, '') AS branch_code,
-  COALESCE(NULLIF(rc.short_name, ''), rc.name, '') AS branch_name,
+  COALESCE(NULLIF(branch.short_name, ''), branch.name, '') AS branch_name,
   COALESCE(si.sell_price, 0) AS unit_price,
-  '' AS vendor_name,
+  COALESCE(NULLIF(rc.short_name, ''), rc.name, '') AS vendor_name,
   TO_CHAR(s.updated_at AT TIME ZONE 'Asia/Taipei', 'YYYYMMDD') AS updated_at,
   COALESCE(a.account, '') AS modified_by,
   COALESCE(sis.size_option_id, 0) AS size_option_id,
@@ -460,6 +478,10 @@ SELECT
 FROM retail_sells s
 JOIN retail_sell_items si ON si.retail_sell_id = s.id
 LEFT JOIN retail_sell_item_sizes sis ON sis.retail_sell_item_id = si.id
+LEFT JOIN LATERAL (
+  SELECT short_name, name FROM retail_customers
+  WHERE branch_code = s.sell_store AND deleted_at IS NULL LIMIT 1
+) branch ON TRUE
 LEFT JOIN retail_customers rc ON rc.id = s.customer_id
 LEFT JOIN admins a ON a.id = s.recorder_id
 %s
@@ -507,9 +529,9 @@ SELECT
   m.modify_no AS doc_no,
   m.modify_date AS doc_date,
   COALESCE(m.modify_store, '') AS branch_code,
-  COALESCE(NULLIF(rc.short_name, ''), rc.name, '') AS branch_name,
+  COALESCE(NULLIF(branch.short_name, ''), branch.name, '') AS branch_name,
   0 AS unit_price,
-  '' AS vendor_name,
+  COALESCE(NULLIF(rc.short_name, ''), rc.name, '') AS vendor_name,
   TO_CHAR(m.updated_at AT TIME ZONE 'Asia/Taipei', 'YYYYMMDD') AS updated_at,
   COALESCE(a.account, '') AS modified_by,
   COALESCE(mis.size_option_id, 0) AS size_option_id,
@@ -517,6 +539,10 @@ SELECT
 FROM modifies m
 JOIN modify_items mi ON mi.modify_id = m.id
 LEFT JOIN modify_item_sizes mis ON mis.modify_item_id = mi.id
+LEFT JOIN LATERAL (
+  SELECT short_name, name FROM retail_customers
+  WHERE branch_code = m.modify_store AND deleted_at IS NULL LIMIT 1
+) branch ON TRUE
 LEFT JOIN retail_customers rc ON rc.id = m.customer_id
 LEFT JOIN admins a ON a.id = m.recorder_id
 %s
@@ -558,15 +584,16 @@ func queryTransferOutRows(db *models.DBManager, productID string, branchCodes, b
 		args = append(args, dateTo)
 	}
 
+	// 調出：以 transfer_item 為單位（單筆 transfer 可能有不同 dest）
 	sql := fmt.Sprintf(`
 SELECT
-  t.id AS header_id,
+  ti.id AS header_id,
   t.transfer_no AS doc_no,
   t.transfer_date AS doc_date,
   COALESCE(t.source_store, '') AS branch_code,
-  COALESCE(NULLIF(rc.short_name, ''), rc.name, '') AS branch_name,
+  COALESCE(NULLIF(branch.short_name, ''), branch.name, '') AS branch_name,
   COALESCE(ti.unit_price, 0) AS unit_price,
-  '' AS vendor_name,
+  COALESCE(NULLIF(dest.short_name, ''), dest.name, '') AS vendor_name,
   TO_CHAR(t.updated_at AT TIME ZONE 'Asia/Taipei', 'YYYYMMDD') AS updated_at,
   COALESCE(a.account, '') AS modified_by,
   COALESCE(tis.size_option_id, 0) AS size_option_id,
@@ -574,10 +601,17 @@ SELECT
 FROM transfers t
 JOIN transfer_items ti ON ti.transfer_id = t.id
 LEFT JOIN transfer_item_sizes tis ON tis.transfer_item_id = ti.id
-LEFT JOIN retail_customers rc ON rc.id = t.source_customer_id
+LEFT JOIN LATERAL (
+  SELECT short_name, name FROM retail_customers
+  WHERE branch_code = t.source_store AND deleted_at IS NULL LIMIT 1
+) branch ON TRUE
+LEFT JOIN LATERAL (
+  SELECT short_name, name FROM retail_customers
+  WHERE branch_code = ti.dest_store AND deleted_at IS NULL LIMIT 1
+) dest ON TRUE
 LEFT JOIN admins a ON a.id = t.recorder_id
 %s
-ORDER BY t.transfer_date, t.id
+ORDER BY t.transfer_date, ti.id
 `, where)
 
 	var raws []rawSizeRow
@@ -622,9 +656,9 @@ SELECT
   t.transfer_no AS doc_no,
   t.transfer_date AS doc_date,
   COALESCE(ti.dest_store, '') AS branch_code,
-  COALESCE(NULLIF(rc.short_name, ''), rc.name, '') AS branch_name,
+  COALESCE(NULLIF(branch.short_name, ''), branch.name, '') AS branch_name,
   COALESCE(ti.unit_price, 0) AS unit_price,
-  '' AS vendor_name,
+  COALESCE(NULLIF(src.short_name, ''), src.name, '') AS vendor_name,
   TO_CHAR(t.updated_at AT TIME ZONE 'Asia/Taipei', 'YYYYMMDD') AS updated_at,
   COALESCE(a.account, '') AS modified_by,
   COALESCE(tis.size_option_id, 0) AS size_option_id,
@@ -632,7 +666,14 @@ SELECT
 FROM transfers t
 JOIN transfer_items ti ON ti.transfer_id = t.id
 LEFT JOIN transfer_item_sizes tis ON tis.transfer_item_id = ti.id
-LEFT JOIN retail_customers rc ON rc.id = ti.dest_customer_id
+LEFT JOIN LATERAL (
+  SELECT short_name, name FROM retail_customers
+  WHERE branch_code = ti.dest_store AND deleted_at IS NULL LIMIT 1
+) branch ON TRUE
+LEFT JOIN LATERAL (
+  SELECT short_name, name FROM retail_customers
+  WHERE branch_code = t.source_store AND deleted_at IS NULL LIMIT 1
+) src ON TRUE
 LEFT JOIN admins a ON a.id = t.recorder_id
 %s
 ORDER BY t.transfer_date, ti.id
@@ -645,14 +686,24 @@ ORDER BY t.transfer_date, ti.id
 	return aggregateBySizes(raws, "transfer_in", "調入"), nil
 }
 
-func queryOrderRows(db *models.DBManager, productID string, branchIDs []string, dateFrom, dateTo string) ([]detailRow, error) {
+func queryOrderRows(db *models.DBManager, productID string, branchCodes, branchIDs []string, dateFrom, dateTo string) ([]detailRow, error) {
 	where := "WHERE o.deleted_at IS NULL AND oi.product_id = ?"
 	args := []interface{}{productID}
-	if len(branchIDs) > 0 {
-		where += " AND o.customer_id IN (" + placeholders(len(branchIDs)) + ")"
-		for _, id := range branchIDs {
-			args = append(args, id)
+	if len(branchCodes) > 0 || len(branchIDs) > 0 {
+		conds := []string{}
+		if len(branchCodes) > 0 {
+			conds = append(conds, "o.order_store IN ("+placeholders(len(branchCodes))+")")
+			for _, c := range branchCodes {
+				args = append(args, c)
+			}
 		}
+		if len(branchIDs) > 0 {
+			conds = append(conds, "o.customer_id IN ("+placeholders(len(branchIDs))+")")
+			for _, id := range branchIDs {
+				args = append(args, id)
+			}
+		}
+		where += " AND (" + strings.Join(conds, " OR ") + ")"
 	}
 	if dateFrom != "" {
 		where += " AND o.order_date >= ?"
@@ -668,10 +719,10 @@ SELECT
   o.id AS header_id,
   o.order_no AS doc_no,
   o.order_date AS doc_date,
-  COALESCE(rc.branch_code, '') AS branch_code,
-  COALESCE(NULLIF(rc.short_name, ''), rc.name, '') AS branch_name,
+  COALESCE(o.order_store, '') AS branch_code,
+  COALESCE(NULLIF(branch.short_name, ''), branch.name, '') AS branch_name,
   COALESCE(oi.order_price, 0) AS unit_price,
-  '' AS vendor_name,
+  COALESCE(NULLIF(rc.short_name, ''), rc.name, '') AS vendor_name,
   TO_CHAR(o.updated_at AT TIME ZONE 'Asia/Taipei', 'YYYYMMDD') AS updated_at,
   COALESCE(a.account, '') AS modified_by,
   COALESCE(ois.size_option_id, 0) AS size_option_id,
@@ -679,6 +730,10 @@ SELECT
 FROM orders o
 JOIN order_items oi ON oi.order_id = o.id
 LEFT JOIN order_item_sizes ois ON ois.order_item_id = oi.id
+LEFT JOIN LATERAL (
+  SELECT short_name, name FROM retail_customers
+  WHERE branch_code = o.order_store AND deleted_at IS NULL LIMIT 1
+) branch ON TRUE
 LEFT JOIN retail_customers rc ON rc.id = o.customer_id
 LEFT JOIN admins a ON a.id = o.recorder_id
 %s
