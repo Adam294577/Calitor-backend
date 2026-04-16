@@ -318,7 +318,8 @@ func SeedMasterDataPermissions(db *DBManager) {
 		{Key: "orders", Name: "客戶訂貨作業", Sort: 4, ParentId: &dailyOps.ID},
 		{Key: "order-outstanding", Name: "訂貨未交統計", Sort: 5, ParentId: &dailyOps.ID},
 		{Key: "shipments", Name: "客戶出貨作業", Sort: 6, ParentId: &dailyOps.ID},
-		{Key: "barcode-print", Name: "條碼列印", Sort: 7, ParentId: &dailyOps.ID},
+		{Key: "retail-sells", Name: "店櫃銷售作業", Sort: 7, ParentId: &dailyOps.ID},
+		{Key: "barcode-print", Name: "條碼列印", Sort: 8, ParentId: &dailyOps.ID},
 	}
 	for i, p := range dailyMid {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&dailyMid[i])
@@ -349,8 +350,13 @@ func SeedMasterDataPermissions(db *DBManager) {
 		{Key: "shipments.create", Name: "新增出貨單", Sort: 2, ParentId: &dailyMid[5].ID},
 		{Key: "shipments.edit", Name: "編輯出貨單", Sort: 3, ParentId: &dailyMid[5].ID},
 		{Key: "shipments.delete", Name: "刪除出貨單", Sort: 4, ParentId: &dailyMid[5].ID},
-		// [5] barcode-print
-		{Key: "barcode-print.view", Name: "檢視條碼列印", Sort: 1, ParentId: &dailyMid[6].ID},
+		// [6] retail-sells
+		{Key: "retail-sells.view", Name: "檢視銷售單", Sort: 1, ParentId: &dailyMid[6].ID},
+		{Key: "retail-sells.create", Name: "新增銷售單", Sort: 2, ParentId: &dailyMid[6].ID},
+		{Key: "retail-sells.edit", Name: "編輯銷售單", Sort: 3, ParentId: &dailyMid[6].ID},
+		{Key: "retail-sells.delete", Name: "刪除銷售單", Sort: 4, ParentId: &dailyMid[6].ID},
+		// [7] barcode-print
+		{Key: "barcode-print.view", Name: "檢視條碼列印", Sort: 1, ParentId: &dailyMid[7].ID},
 	}
 	for _, p := range dailyLeaf {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&p)
@@ -369,6 +375,7 @@ func SeedMasterDataPermissions(db *DBManager) {
 	inventoryMid := []Permission{
 		{Key: "inventory-query", Name: "庫存查詢", Sort: 1, ParentId: &inventoryOps.ID},
 		{Key: "modify", Name: "庫存調整作業", Sort: 2, ParentId: &inventoryOps.ID},
+		{Key: "transfer", Name: "店櫃調撥作業", Sort: 3, ParentId: &inventoryOps.ID},
 	}
 	for i, p := range inventoryMid {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&inventoryMid[i])
@@ -381,6 +388,10 @@ func SeedMasterDataPermissions(db *DBManager) {
 		{Key: "inventory-query.view", Name: "檢視庫存", Sort: 1, ParentId: &inventoryMid[0].ID},
 		{Key: "modify.view", Name: "檢視調整單", Sort: 1, ParentId: &inventoryMid[1].ID},
 		{Key: "modify.create", Name: "新增調整單", Sort: 2, ParentId: &inventoryMid[1].ID},
+		{Key: "transfer.view", Name: "檢視調撥單", Sort: 1, ParentId: &inventoryMid[2].ID},
+		{Key: "transfer.create", Name: "新增調撥單", Sort: 2, ParentId: &inventoryMid[2].ID},
+		{Key: "transfer.edit", Name: "編輯調撥單", Sort: 3, ParentId: &inventoryMid[2].ID},
+		{Key: "transfer.delete", Name: "刪除調撥單", Sort: 4, ParentId: &inventoryMid[2].ID},
 	}
 	for _, p := range inventoryLeaf {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&p)
@@ -398,7 +409,8 @@ func SeedMasterDataPermissions(db *DBManager) {
 
 	accountMid := []Permission{
 		{Key: "receivable-query", Name: "應收帳款查詢", Sort: 1, ParentId: &accountOps.ID},
-		{Key: "gather", Name: "應收沖銷作業", Sort: 2, ParentId: &accountOps.ID},
+		{Key: "receivable-aging", Name: "應收帳齡分析表", Sort: 2, ParentId: &accountOps.ID},
+		{Key: "gather", Name: "應收沖銷作業", Sort: 3, ParentId: &accountOps.ID},
 	}
 	for i, p := range accountMid {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&accountMid[i])
@@ -409,12 +421,40 @@ func SeedMasterDataPermissions(db *DBManager) {
 
 	accountLeaf := []Permission{
 		{Key: "receivable-query.view", Name: "檢視應收帳款", Sort: 1, ParentId: &accountMid[0].ID},
-		{Key: "gather.view", Name: "檢視收款單", Sort: 1, ParentId: &accountMid[1].ID},
-		{Key: "gather.create", Name: "新增收款單", Sort: 2, ParentId: &accountMid[1].ID},
-		{Key: "gather.edit", Name: "編輯收款單", Sort: 3, ParentId: &accountMid[1].ID},
-		{Key: "gather.delete", Name: "刪除收款單", Sort: 4, ParentId: &accountMid[1].ID},
+		{Key: "receivable-aging.view", Name: "檢視應收帳齡分析", Sort: 1, ParentId: &accountMid[1].ID},
+		{Key: "gather.view", Name: "檢視收款單", Sort: 1, ParentId: &accountMid[2].ID},
+		{Key: "gather.create", Name: "新增收款單", Sort: 2, ParentId: &accountMid[2].ID},
+		{Key: "gather.edit", Name: "編輯收款單", Sort: 3, ParentId: &accountMid[2].ID},
+		{Key: "gather.delete", Name: "刪除收款單", Sort: 4, ParentId: &accountMid[2].ID},
 	}
 	for _, p := range accountLeaf {
+		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&p)
+		db.GetWrite().Model(&Permission{}).Where("key = ?", p.Key).Updates(map[string]interface{}{
+			"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId,
+		})
+	}
+
+	// === 頂層：統計報表作業 ===
+	statisticalReports := Permission{Key: "statistical-reports", Name: "統計報表作業", Sort: 8}
+	db.GetWrite().Where("key = ?", statisticalReports.Key).FirstOrCreate(&statisticalReports)
+	db.GetWrite().Model(&Permission{}).Where("key = ?", statisticalReports.Key).Updates(map[string]interface{}{
+		"name": statisticalReports.Name, "sort": statisticalReports.Sort,
+	})
+
+	statisticalMid := []Permission{
+		{Key: "product-in-out-summary", Name: "商品進出簡表", Sort: 1, ParentId: &statisticalReports.ID},
+	}
+	for i, p := range statisticalMid {
+		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&statisticalMid[i])
+		db.GetWrite().Model(&Permission{}).Where("key = ?", p.Key).Updates(map[string]interface{}{
+			"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId,
+		})
+	}
+
+	statisticalLeaf := []Permission{
+		{Key: "product-in-out-summary.view", Name: "檢視商品進出簡表", Sort: 1, ParentId: &statisticalMid[0].ID},
+	}
+	for _, p := range statisticalLeaf {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&p)
 		db.GetWrite().Model(&Permission{}).Where("key = ?", p.Key).Updates(map[string]interface{}{
 			"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId,

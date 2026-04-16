@@ -17,6 +17,7 @@ import (
 	"project/services/storage"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -111,16 +112,29 @@ func App(HttpServer *gin.Engine) {
 	// 一次性遷移：將 role_permissions 中的父節點展開為葉子節點
 	// models.MigrateRolePermissionsToLeaf(db)
 
-	// 初始化全域 Redis 連接
-	redisClient := redis.InitGlobal()
+	// 並行初始化 Redis 與 MinIO（減少啟動等待時間）
+	var redisClient *redis.Client
+	var minioClient *storage.Client
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		redisClient = redis.InitGlobal()
+	}()
+
+	go func() {
+		defer wg.Done()
+		minioClient = storage.NewClient()
+	}()
+
+	wg.Wait()
+
 	if redisClient.IsAvailable() {
 		fmt.Println("✓ Redis 緩存功能已啟用")
 	} else {
 		fmt.Println("⚠ Redis 緩存功能未啟用，將使用優雅降級模式（直接查詢資料庫）")
 	}
-
-	// 初始化並檢查 MinIO 連接
-	minioClient := storage.NewClient()
 	if minioClient.IsAvailable() {
 		fmt.Println("✓ MinIO 檔案儲存功能已啟用")
 	} else {

@@ -19,6 +19,7 @@ func GetOrders(c *gin.Context) {
 
 	var items []models.Order
 	query := db.GetRead().
+		Joins("JOIN retail_customers ON retail_customers.id = orders.customer_id AND retail_customers.is_visible = true").
 		Preload("Customer").
 		Preload("Brand").
 		Order("order_date DESC, id DESC")
@@ -174,19 +175,12 @@ func CreateOrder(c *gin.Context) {
 		return
 	}
 
-	// 查詢客戶 BranchCode
-	var customer models.RetailCustomer
-	if err := db.GetRead().Where("id = ?", req.CustomerID).First(&customer).Error; err != nil {
-		resp.Fail(http.StatusBadRequest, "客戶不存在").Send()
-		return
-	}
-
-	// 產生訂貨單號: O + BranchCode + YYMM + 流水號3碼
+	// 產生訂貨單號: O + 訂貨庫點BranchCode + YYMM + 流水號3碼
 	yymm := ""
 	if len(req.OrderDate) >= 6 {
 		yymm = req.OrderDate[2:6]
 	}
-	prefix := "O" + customer.BranchCode + yymm
+	prefix := "O" + req.OrderStore + yymm
 
 	var maxNo string
 	db.GetRead().Unscoped().Model(&models.Order{}).
@@ -348,12 +342,40 @@ func UpdateOrder(c *gin.Context) {
 
 	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
 		// 只刪除未停貨的明細
-		var activeItemIDs []int64
-		tx.Model(&models.OrderItem{}).Where("order_id = ? AND cancel_flag < 2", id).Pluck("id", &activeItemIDs)
-		if len(activeItemIDs) > 0 {
-			tx.Where("order_item_id IN ?", activeItemIDs).Delete(&models.OrderItemSize{})
+		var activeItems []models.OrderItem
+		if err := tx.Where("order_id = ? AND cancel_flag < 2", id).Find(&activeItems).Error; err != nil {
+			return err
 		}
-		tx.Where("order_id = ? AND cancel_flag < 2", id).Delete(&models.OrderItem{})
+		var activeItemIDs []int64
+		// 記錄舊 orderItemID → productID 的對照，用於重新關聯出貨明細
+		oldItemProductMap := map[int64]int64{} // orderItemID → productID
+		for _, ai := range activeItems {
+			activeItemIDs = append(activeItemIDs, ai.ID)
+			oldItemProductMap[ai.ID] = ai.ProductID
+		}
+
+		// 收集被出貨明細引用的 orderItemID → shipmentItemIDs
+		shipmentItemLinks := map[int64][]int64{} // productID → []shipmentItemID
+		if len(activeItemIDs) > 0 {
+			var linkedShipItems []models.ShipmentItem
+			tx.Where("order_item_id IN ?", activeItemIDs).Find(&linkedShipItems)
+			for _, si := range linkedShipItems {
+				if si.OrderItemID != nil {
+					pid := oldItemProductMap[*si.OrderItemID]
+					shipmentItemLinks[pid] = append(shipmentItemLinks[pid], si.ID)
+				}
+			}
+			// 先解除 FK 關聯，避免刪除 OrderItem 時 FK violation
+			if err := tx.Model(&models.ShipmentItem{}).Where("order_item_id IN ?", activeItemIDs).Update("order_item_id", nil).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("order_item_id IN ?", activeItemIDs).Delete(&models.OrderItemSize{}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("order_id = ? AND cancel_flag < 2", id).Delete(&models.OrderItem{}).Error; err != nil {
+			return err
+		}
 
 		adminId, _ := c.Get("AdminId")
 		recorderID := existing.RecorderID
@@ -363,13 +385,11 @@ func UpdateOrder(c *gin.Context) {
 
 		updates := map[string]interface{}{
 			"order_date":      req.OrderDate,
-			"customer_id":     req.CustomerID,
 			"fill_person_id":  req.FillPersonID,
 			"recorder_id":     recorderID,
 			"deal_mode":       req.DealMode,
 			"client_order_id": req.ClientOrderID,
 			"brand_id":        req.BrandID,
-			"order_store":     req.OrderStore,
 			"remark":          req.Remark,
 			"tax_mode":        req.TaxMode,
 			"tax_rate":        req.TaxRate,
@@ -416,6 +436,13 @@ func UpdateOrder(c *gin.Context) {
 					Qty:          s.Qty,
 				}
 				if err := tx.Create(&size).Error; err != nil {
+					return err
+				}
+			}
+
+			// 重新關聯出貨明細到新的 orderItem
+			if siIDs, ok := shipmentItemLinks[reqItem.ProductID]; ok && len(siIDs) > 0 {
+				if err := tx.Model(&models.ShipmentItem{}).Where("id IN ?", siIDs).Update("order_item_id", item.ID).Error; err != nil {
 					return err
 				}
 			}

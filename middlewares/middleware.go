@@ -204,7 +204,7 @@ func Auth() gin.HandlerFunc {
 
 		ctx.Set("AdminId", claims["AdminId"])
 		ctx.Set("Account", claims["Account"])
-		ctx.Set("RoleId", claims["RoleId"])
+		ctx.Set("RoleIds", claims["RoleIds"])
 		if perms, exists := claims["Permissions"]; exists {
 			ctx.Set("Permissions", perms)
 		}

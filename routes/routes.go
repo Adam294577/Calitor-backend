@@ -158,6 +158,7 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.POST("/members", middlewares.RequirePermission("member-mgmt.create"), controllers.CreateMember)
 		adminAuth.PUT("/members/:id", middlewares.RequirePermission("member-mgmt.edit"), controllers.UpdateMember)
 		adminAuth.DELETE("/members/:id", middlewares.RequirePermission("member-mgmt.delete"), controllers.DeleteMember)
+		adminAuth.GET("/members/:id/transactions", middlewares.RequirePermission("member-mgmt.view"), controllers.GetMemberTransactions)
 
 		// 主檔 - 商品
 		adminAuth.GET("/products", middlewares.RequirePermission("product-mgmt.view"), controllers.GetProducts)
@@ -210,14 +211,38 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.PUT("/shipments/:id", middlewares.RequirePermission("shipments.edit"), controllers.UpdateShipment)
 		adminAuth.DELETE("/shipments/:id", middlewares.RequirePermission("shipments.delete"), controllers.DeleteShipment)
 		adminAuth.GET("/shipments/credit/:customer_id", middlewares.RequirePermission("shipments.view"), controllers.GetCustomerCredit)
+		adminAuth.POST("/shipments/barcode-parse", middlewares.RequirePermission("shipments.create"), controllers.BarcodeParse)
 
 		// 庫存管理 - 庫存查詢
 		adminAuth.GET("/inventory", middlewares.RequirePermission("inventory-query.view"), controllers.GetInventory)
+
+		// 統計報表作業 - 商品進出簡表
+		adminAuth.GET("/reports/product-in-out-summary/products",
+			middlewares.RequirePermission("product-in-out-summary.view"),
+			controllers.GetProductInOutSummaryProducts)
+		adminAuth.GET("/reports/product-in-out-summary/detail",
+			middlewares.RequirePermission("product-in-out-summary.view"),
+			controllers.GetProductInOutSummaryDetail)
 
 		// 庫存管理 - 庫存調整
 		adminAuth.GET("/modifies", middlewares.RequirePermission("modify.view"), controllers.GetModifies)
 		adminAuth.GET("/modifies/:id", middlewares.RequirePermission("modify.view"), controllers.GetModify)
 		adminAuth.POST("/modifies", middlewares.RequirePermission("modify.create"), controllers.CreateModify)
+
+		// 庫存管理 - 店櫃調撥
+		adminAuth.GET("/transfers", middlewares.RequirePermission("transfer.view"), controllers.GetTransfers)
+		adminAuth.GET("/transfers/:id", middlewares.RequirePermission("transfer.view"), controllers.GetTransfer)
+		adminAuth.POST("/transfers", middlewares.RequirePermission("transfer.create"), controllers.CreateTransfer)
+		adminAuth.PUT("/transfers/:id", middlewares.RequirePermission("transfer.edit"), controllers.UpdateTransfer)
+		adminAuth.DELETE("/transfers/:id", middlewares.RequirePermission("transfer.delete"), controllers.DeleteTransfer)
+		adminAuth.PUT("/transfers/:id/confirm", middlewares.RequirePermission("transfer.edit"), controllers.ConfirmTransfer)
+
+		// 零售銷售
+		adminAuth.GET("/retail-sells", middlewares.RequirePermission("retail-sells.view"), controllers.GetRetailSells)
+		adminAuth.GET("/retail-sells/:id", middlewares.RequirePermission("retail-sells.view"), controllers.GetRetailSell)
+		adminAuth.POST("/retail-sells", middlewares.RequirePermission("retail-sells.create"), controllers.CreateRetailSell)
+		adminAuth.PUT("/retail-sells/:id", middlewares.RequirePermission("retail-sells.edit"), controllers.UpdateRetailSell)
+		adminAuth.DELETE("/retail-sells/:id", middlewares.RequirePermission("retail-sells.delete"), controllers.DeleteRetailSell)
 
 		// 成本轉換公式
 		adminAuth.GET("/cost-formulas", controllers.GetCostFormulas)
@@ -225,6 +250,9 @@ func RouterRegister(route *gin.Engine) {
 
 		// 帳款管理 - 應收帳款查詢
 		adminAuth.GET("/receivables", middlewares.RequirePermission("receivable-query.view"), controllers.GetReceivables)
+
+		// 帳款管理 - 應收帳齡分析表
+		adminAuth.GET("/receivables/aging", middlewares.RequirePermission("receivable-aging.view"), controllers.GetReceivableAging)
 
 		// 帳款管理 - 應收沖銷作業
 		adminAuth.GET("/gathers", middlewares.RequirePermission("gather.view"), controllers.GetGathers)

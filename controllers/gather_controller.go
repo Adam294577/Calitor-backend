@@ -139,8 +139,13 @@ func GetUnclearedShipments(c *gin.Context) {
 	defer db.Close()
 
 	customerID := c.Param("customer_id")
+	excludeGatherID := int64(0)
+	if v := c.Query("exclude_gather_id"); v != "" {
+		excludeGatherID, _ = strconv.ParseInt(v, 10, 64)
+	}
+
 	query := db.GetRead().Model(&models.Shipment{}).
-		Where("customer_id = ? AND deal_amount != charge_amount", customerID)
+		Where("customer_id = ?", customerID)
 
 	if v := c.Query("date_from"); v != "" {
 		query = query.Where("shipment_date >= ?", v)
@@ -163,13 +168,59 @@ func GetUnclearedShipments(c *gin.Context) {
 	var shipments []models.Shipment
 	query.Order("shipment_date ASC, id ASC").Find(&shipments)
 
+	if len(shipments) == 0 {
+		resp.Success("成功").SetData([]unclearedRow{}).Send()
+		return
+	}
+
+	// 批次查 gather_details 聚合折讓/其他扣額（可排除指定 gather）
+	shipIDs := make([]int64, len(shipments))
+	for i, s := range shipments {
+		shipIDs[i] = s.ID
+	}
+
+	type shipAgg struct {
+		ShipmentID     int64   `json:"shipment_id"`
+		TotalWriteOff  float64 `json:"total_write_off"`
+		TotalDiscount  float64 `json:"total_discount"`
+		TotalOther     float64 `json:"total_other"`
+	}
+	var aggs []shipAgg
+
+	aggQuery := db.GetRead().Table("gather_details gd").
+		Select("gd.shipment_id, COALESCE(SUM(gd.write_off_amount), 0) as total_write_off, COALESCE(SUM(gd.discount_amount), 0) as total_discount, COALESCE(SUM(gd.other_deduct), 0) as total_other").
+		Joins("JOIN gathers g ON g.id = gd.gather_id AND g.deleted_at IS NULL").
+		Where("gd.shipment_id IN (?)", shipIDs).
+		Group("gd.shipment_id")
+
+	if excludeGatherID > 0 {
+		aggQuery = aggQuery.Where("gd.gather_id != ?", excludeGatherID)
+	}
+	aggQuery.Scan(&aggs)
+
+	aggMap := map[int64]shipAgg{}
+	for _, a := range aggs {
+		aggMap[a.ShipmentID] = a
+	}
+
 	rows := make([]unclearedRow, 0, len(shipments))
 	for _, s := range shipments {
+		agg := aggMap[s.ID]
+		// 未沖金額 = 應收 - 沖銷金額 - 折讓 - 其他扣額
+		// 排除指定 gather 時，用 agg 計算的排除後數值；否則用 shipment 上的 charge_amount
+		effectiveCharge := s.ChargeAmount
+		if excludeGatherID > 0 {
+			effectiveCharge = agg.TotalWriteOff
+		}
+		uncleared := math.Round((s.DealAmount-effectiveCharge-agg.TotalDiscount-agg.TotalOther)*100) / 100
+		if uncleared == 0 {
+			continue
+		}
+
 		label := "出貨"
 		if s.ShipmentMode == 4 {
 			label = "退貨"
 		}
-		uncleared := math.Round((s.DealAmount-s.ChargeAmount)*100) / 100
 		rows = append(rows, unclearedRow{
 			ID:                s.ID,
 			ShipmentModeLabel: label,
@@ -192,6 +243,7 @@ type gatherRequest struct {
 	CustomerID     int64                `json:"customer_id"`
 	CheckNo        string               `json:"check_no"`
 	CheckDueDate   string               `json:"check_due_date"`
+	CheckAmount    float64              `json:"check_amount"`
 	GatherAmount   float64              `json:"gather_amount"`
 	DiscountAmount float64              `json:"discount_amount"`
 	OtherDeduct    float64              `json:"other_deduct"`
@@ -199,6 +251,7 @@ type gatherRequest struct {
 	ActualAmount      float64              `json:"actual_amount"`
 	PrepaidCreditUsed float64              `json:"prepaid_credit_used"`
 	GatherPersonID    *int64               `json:"gather_person_id"`
+	OpenBank       string               `json:"open_bank"`
 	BankAccountNo  string               `json:"bank_account_no"`
 	StartBrandID   string               `json:"start_brand_id"`
 	EndBrandID     string               `json:"end_brand_id"`
@@ -271,6 +324,7 @@ func CreateGather(c *gin.Context) {
 			CustomerID:     req.CustomerID,
 			CheckNo:        req.CheckNo,
 			CheckDueDate:   req.CheckDueDate,
+			CheckAmount:    req.CheckAmount,
 			GatherAmount:   req.GatherAmount,
 			DiscountAmount: req.DiscountAmount,
 			OtherDeduct:    req.OtherDeduct,
@@ -279,6 +333,7 @@ func CreateGather(c *gin.Context) {
 			PrepaidCreditUsed: req.PrepaidCreditUsed,
 			GatherPersonID:    req.GatherPersonID,
 			RecorderID:     recorderID,
+			OpenBank:       req.OpenBank,
 			BankAccountNo:  req.BankAccountNo,
 			StartBrandID:   req.StartBrandID,
 			EndBrandID:     req.EndBrandID,
@@ -306,8 +361,8 @@ func CreateGather(c *gin.Context) {
 				return err
 			}
 
-			// 回寫 shipment.charge_amount（沖銷金額 + 折讓 + 其他扣額）
-			chargeBack := item.WriteOffAmount + item.DiscountAmount + item.OtherDeduct
+			// 回寫 shipment.charge_amount（僅沖銷金額，折讓/其他扣額由 gather_details 獨立管理）
+			chargeBack := item.WriteOffAmount
 			if chargeBack != 0 {
 				if err := tx.Model(&models.Shipment{}).
 					Where("id = ?", item.ShipmentID).
@@ -355,7 +410,7 @@ func UpdateGather(c *gin.Context) {
 		}
 
 		for _, old := range oldDetails {
-			chargeBack := old.WriteOffAmount + old.DiscountAmount + old.OtherDeduct
+			chargeBack := old.WriteOffAmount
 			if chargeBack != 0 {
 				if err := tx.Model(&models.Shipment{}).
 					Where("id = ?", old.ShipmentID).
@@ -376,6 +431,7 @@ func UpdateGather(c *gin.Context) {
 			"customer_id":     req.CustomerID,
 			"check_no":        req.CheckNo,
 			"check_due_date":  req.CheckDueDate,
+			"check_amount":    req.CheckAmount,
 			"gather_amount":   req.GatherAmount,
 			"discount_amount": req.DiscountAmount,
 			"other_deduct":    req.OtherDeduct,
@@ -383,6 +439,7 @@ func UpdateGather(c *gin.Context) {
 			"actual_amount":        req.ActualAmount,
 			"prepaid_credit_used": req.PrepaidCreditUsed,
 			"gather_person_id":    req.GatherPersonID,
+			"open_bank":       req.OpenBank,
 			"bank_account_no": req.BankAccountNo,
 			"start_brand_id":  req.StartBrandID,
 			"end_brand_id":    req.EndBrandID,
@@ -408,7 +465,7 @@ func UpdateGather(c *gin.Context) {
 				return err
 			}
 
-			chargeBack := item.WriteOffAmount + item.DiscountAmount + item.OtherDeduct
+			chargeBack := item.WriteOffAmount
 			if chargeBack != 0 {
 				if err := tx.Model(&models.Shipment{}).
 					Where("id = ?", item.ShipmentID).
@@ -450,7 +507,7 @@ func DeleteGather(c *gin.Context) {
 		}
 
 		for _, item := range details {
-			chargeBack := item.WriteOffAmount + item.DiscountAmount + item.OtherDeduct
+			chargeBack := item.WriteOffAmount
 			if chargeBack != 0 {
 				if err := tx.Model(&models.Shipment{}).
 					Where("id = ?", item.ShipmentID).

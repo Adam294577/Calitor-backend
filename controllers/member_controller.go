@@ -185,3 +185,38 @@ func DeleteMember(c *gin.Context) {
 	db.GetWrite().Delete(&models.Member{}, id)
 	resp.Success("刪除成功").Send()
 }
+
+// GetMemberTransactions 會員歷史交易紀錄
+func GetMemberTransactions(c *gin.Context) {
+	resp := response.New(c)
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		resp.Fail(http.StatusBadRequest, "無效的 ID").Send()
+		return
+	}
+
+	db := models.PostgresNew()
+	defer db.Close()
+
+	var items []models.RetailSellItem
+	query := db.GetRead().
+		Joins("JOIN retail_sells ON retail_sells.id = retail_sell_items.retail_sell_id AND retail_sells.deleted_at IS NULL").
+		Where("retail_sell_items.member_id = ?", id).
+		Preload("RetailSell").
+		Preload("Product").
+		Preload("SizeGroup").
+		Preload("Sizes").
+		Preload("Sizes.SizeOption").
+		Order("retail_sells.sell_date DESC, retail_sell_items.id DESC")
+
+	if v := c.Query("date_from"); v != "" {
+		query = query.Where("retail_sells.sell_date >= ?", v)
+	}
+	if v := c.Query("date_to"); v != "" {
+		query = query.Where("retail_sells.sell_date <= ?", v)
+	}
+
+	paged, total := Paginate(c, query, &models.RetailSellItem{})
+	paged.Find(&items)
+	resp.Success("成功").SetData(items).SetTotal(total).Send()
+}

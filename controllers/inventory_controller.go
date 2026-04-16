@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"fmt"
+	"math"
 	"project/models"
 	response "project/services/responses"
 	"strconv"
@@ -74,6 +75,13 @@ func GetInventory(c *gin.Context) {
 	if v := c.Query("brand_ids"); v != "" {
 		ids := strings.Split(v, ",")
 		where += " AND p.product_brand_id IN (" + placeholders(len(ids)) + ")"
+		for _, id := range ids {
+			args = append(args, strings.TrimSpace(id))
+		}
+	}
+	if v := c.Query("reconciliation_brand_ids"); v != "" {
+		ids := strings.Split(v, ",")
+		where += " AND p.brand_id IN (" + placeholders(len(ids)) + ")"
 		for _, id := range ids {
 			args = append(args, strings.TrimSpace(id))
 		}
@@ -206,20 +214,37 @@ ORDER BY p.model_code, pss.customer_id, so.sort_order
 	}
 
 	// 組裝 rows，填入完整 size_options
-	rows := make([]inventoryRow, 0, len(aggOrder))
+	allRows := make([]inventoryRow, 0, len(aggOrder))
 	for _, key := range aggOrder {
 		row := aggMap[key]
-		row.Amount = row.CostStart * float64(row.TotalQty)
+		row.Amount = math.Round(row.CostStart * float64(row.TotalQty))
 		row.SizeOptions = sizeGroupOptionsMap[row.SizeGroupID]
 		if row.SizeOptions == nil {
 			row.SizeOptions = []inventorySizeCol{}
 		}
-		rows = append(rows, *row)
+		allRows = append(allRows, *row)
+	}
+
+	// 計算全資料合計（分頁前）
+	summaryTotalQty := 0
+	summaryTotalAmount := 0.0
+	summarySizes := map[string]int{}
+	for _, r := range allRows {
+		summaryTotalQty += r.TotalQty
+		summaryTotalAmount += r.Amount
+		for k, v := range r.Sizes {
+			summarySizes[k] += v
+		}
 	}
 
 	resp.Success("成功").SetData(map[string]interface{}{
-		"rows": rows,
-	}).SetTotal(int64(len(rows))).Send()
+		"rows": allRows,
+		"summary": map[string]interface{}{
+			"total_qty":    summaryTotalQty,
+			"total_amount": math.Round(summaryTotalAmount),
+			"sizes":        summarySizes,
+		},
+	}).SetTotal(int64(len(allRows))).Send()
 }
 
 // placeholders 產生 n 個 "?" 逗號分隔，供 IN 子句使用

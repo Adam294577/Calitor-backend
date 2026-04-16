@@ -61,14 +61,17 @@ func Login(c *gin.Context) {
 	// 登入成功，重置 rate limit 計數
 	middlewares.LoginRateLimitReset(ip)
 
+	// 查詢角色 ID
+	roleIds := getAdminRoleIds(db, admin.ID)
+
 	// 查詢權限
-	permissions := getAdminPermissions(db, &admin)
+	permissions := getAdminPermissions(db, &admin, roleIds)
 
 	// 產生 JWT token（含權限）
 	token, err := library.GenerateAdminToken(library.AdminTokenClaims{
 		AdminId:     admin.ID,
 		Account:     admin.Account,
-		RoleId:      admin.RoleId,
+		RoleIds:     roleIds,
 		Permissions: permissions,
 	})
 	if err != nil {
@@ -76,9 +79,27 @@ func Login(c *gin.Context) {
 		return
 	}
 
+	// 查詢角色名稱
+	var roleNames []string
+	if len(roleIds) > 0 {
+		var roles []models.Role
+		db.GetRead().Where("id IN ?", roleIds).Find(&roles)
+		for _, r := range roles {
+			roleNames = append(roleNames, r.Name)
+		}
+	}
+
 	resp.Success("登入成功").SetData(gin.H{
 		"token": token,
-		"admin": admin,
+		"admin": gin.H{
+			"id":         admin.ID,
+			"account":    admin.Account,
+			"name":       admin.Name,
+			"role_ids":   roleIds,
+			"is_super":   admin.IsSuper,
+			"is_disabled": admin.IsDisabled,
+			"role_names": roleNames,
+		},
 	}).Send()
 }
 
@@ -96,16 +117,23 @@ func GetMe(c *gin.Context) {
 		return
 	}
 
-	// 查詢角色名稱
-	var role models.Role
-	db.GetRead().Where("id = ?", admin.RoleId).First(&role)
+	// 查詢角色
+	roleIds := getAdminRoleIds(db, admin.ID)
+	var roleNames []string
+	if len(roleIds) > 0 {
+		var roles []models.Role
+		db.GetRead().Where("id IN ?", roleIds).Find(&roles)
+		for _, r := range roles {
+			roleNames = append(roleNames, r.Name)
+		}
+	}
 
 	// 查詢權限並產生新 token
-	permissions := getAdminPermissions(db, &admin)
+	permissions := getAdminPermissions(db, &admin, roleIds)
 	token, err := library.GenerateAdminToken(library.AdminTokenClaims{
 		AdminId:     admin.ID,
 		Account:     admin.Account,
-		RoleId:      admin.RoleId,
+		RoleIds:     roleIds,
 		Permissions: permissions,
 	})
 	if err != nil {
@@ -116,12 +144,12 @@ func GetMe(c *gin.Context) {
 	resp.Success("成功").SetData(gin.H{
 		"token": token,
 		"admin": gin.H{
-			"id":        admin.ID,
-			"account":   admin.Account,
-			"name":      admin.Name,
-			"role_id":   admin.RoleId,
-			"is_super":  admin.IsSuper,
-			"role_name": role.Name,
+			"id":         admin.ID,
+			"account":    admin.Account,
+			"name":       admin.Name,
+			"role_ids":   roleIds,
+			"is_super":   admin.IsSuper,
+			"role_names": roleNames,
 		},
 	}).Send()
 }
@@ -171,10 +199,10 @@ func ChangePassword(c *gin.Context) {
 
 // createAccountRequest 新增帳號請求
 type createAccountRequest struct {
-	Account  string `json:"account" binding:"required"`
-	Name     string `json:"name" binding:"required"`
-	Password string `json:"password" binding:"required"`
-	RoleId   int64  `json:"role_id" binding:"required"`
+	Account  string  `json:"account" binding:"required"`
+	Name     string  `json:"name" binding:"required"`
+	Password string  `json:"password" binding:"required"`
+	RoleIds  []int64 `json:"role_ids" binding:"required,min=1"`
 }
 
 // CreateAccount 新增帳號
@@ -197,10 +225,11 @@ func CreateAccount(c *gin.Context) {
 		return
 	}
 
-	// 檢查角色是否存在
-	var role models.Role
-	if err := db.GetRead().Where("id = ?", req.RoleId).First(&role).Error; err != nil {
-		resp.Fail(http.StatusBadRequest, "角色不存在").Send()
+	// 檢查角色是否都存在
+	var roleCount int64
+	db.GetRead().Model(&models.Role{}).Where("id IN ?", req.RoleIds).Count(&roleCount)
+	if roleCount != int64(len(req.RoleIds)) {
+		resp.Fail(http.StatusBadRequest, "部分角色不存在").Send()
 		return
 	}
 
@@ -214,9 +243,20 @@ func CreateAccount(c *gin.Context) {
 		Account:  req.Account,
 		Name:     req.Name,
 		Password: hashedPassword,
-		RoleId:   req.RoleId,
 	}
-	if err := db.GetWrite().Create(&admin).Error; err != nil {
+	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&admin).Error; err != nil {
+			return err
+		}
+		for _, roleId := range req.RoleIds {
+			ar := models.AdminRole{AdminId: admin.ID, RoleId: roleId}
+			if err := tx.Create(&ar).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		resp.Panic(err).Send()
 		return
 	}
@@ -231,26 +271,54 @@ func GetAccounts(c *gin.Context) {
 	db := models.PostgresNew()
 	defer db.Close()
 
-	type AccountItem struct {
-		models.Admin
-		RoleName string `json:"role_name"`
+	var admins []models.Admin
+	db.GetRead().Order("id ASC").Find(&admins)
+
+	// 查詢所有角色關聯
+	var allAdminRoles []models.AdminRole
+	db.GetRead().Find(&allAdminRoles)
+
+	// 查詢所有角色
+	var allRoles []models.Role
+	db.GetRead().Find(&allRoles)
+	roleMap := map[int64]string{}
+	for _, r := range allRoles {
+		roleMap[r.ID] = r.Name
 	}
 
-	var accounts []AccountItem
-	db.GetRead().Model(&models.Admin{}).
-		Select("admins.*, roles.name as role_name").
-		Joins("LEFT JOIN roles ON roles.id = admins.role_id").
-		Order("admins.id ASC").
-		Find(&accounts)
+	// 組裝 adminId → roleIds / roleNames
+	adminRoleMap := map[int64][]int64{}
+	adminRoleNameMap := map[int64][]string{}
+	for _, ar := range allAdminRoles {
+		adminRoleMap[ar.AdminId] = append(adminRoleMap[ar.AdminId], ar.RoleId)
+		if name, ok := roleMap[ar.RoleId]; ok {
+			adminRoleNameMap[ar.AdminId] = append(adminRoleNameMap[ar.AdminId], name)
+		}
+	}
 
-	resp.Success("成功").SetData(accounts).Send()
+	type AccountItem struct {
+		models.Admin
+		RoleIds   []int64  `json:"role_ids"`
+		RoleNames []string `json:"role_names"`
+	}
+
+	result := make([]AccountItem, len(admins))
+	for i, a := range admins {
+		result[i] = AccountItem{
+			Admin:     a,
+			RoleIds:   adminRoleMap[a.ID],
+			RoleNames: adminRoleNameMap[a.ID],
+		}
+	}
+
+	resp.Success("成功").SetData(result).Send()
 }
 
 // updateAccountRequest 編輯帳號請求
 type updateAccountRequest struct {
-	Account string `json:"account"`
-	Name    string `json:"name"`
-	RoleId  int64  `json:"role_id"`
+	Account string  `json:"account"`
+	Name    string  `json:"name"`
+	RoleIds []int64 `json:"role_ids"`
 }
 
 // UpdateAccount 編輯帳號
@@ -294,11 +362,32 @@ func UpdateAccount(c *gin.Context) {
 	if req.Name != "" {
 		updates["name"] = req.Name
 	}
-	if req.RoleId > 0 {
-		updates["role_id"] = req.RoleId
+
+	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
+		if len(updates) > 0 {
+			if err := tx.Model(&admin).Updates(updates).Error; err != nil {
+				return err
+			}
+		}
+		// 更新角色關聯（全量替換）
+		if req.RoleIds != nil {
+			if err := tx.Where("admin_id = ?", id).Delete(&models.AdminRole{}).Error; err != nil {
+				return err
+			}
+			for _, roleId := range req.RoleIds {
+				ar := models.AdminRole{AdminId: id, RoleId: roleId}
+				if err := tx.Create(&ar).Error; err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		resp.Panic(err).Send()
+		return
 	}
 
-	db.GetWrite().Model(&admin).Updates(updates)
 	resp.Success("更新成功").Send()
 }
 
@@ -404,16 +493,28 @@ func GetPermissions(c *gin.Context) {
 	resp.Success("成功").SetData(permissions).Send()
 }
 
+// getAdminRoleIds 取得帳號的所有角色 ID
+func getAdminRoleIds(db *models.DBManager, adminId int64) []int64 {
+	var adminRoles []models.AdminRole
+	db.GetRead().Where("admin_id = ?", adminId).Find(&adminRoles)
+	ids := make([]int64, len(adminRoles))
+	for i, ar := range adminRoles {
+		ids[i] = ar.RoleId
+	}
+	return ids
+}
+
 // getAdminPermissions 取得管理員權限列表（含向上補齊祖先節點）
-func getAdminPermissions(db *models.DBManager, admin *models.Admin) []string {
+func getAdminPermissions(db *models.DBManager, admin *models.Admin, roleIds []int64) []string {
 	var permissions []models.Permission
 
 	if admin.IsSuper {
 		db.GetRead().Order("sort ASC").Find(&permissions)
-	} else {
+	} else if len(roleIds) > 0 {
 		db.GetRead().
 			Joins("JOIN role_permissions ON role_permissions.permission_id = permissions.id").
-			Where("role_permissions.role_id = ?", admin.RoleId).
+			Where("role_permissions.role_id IN ?", roleIds).
+			Group("permissions.id").
 			Order("permissions.sort ASC").
 			Find(&permissions)
 	}
@@ -587,7 +688,7 @@ func DeleteRole(c *gin.Context) {
 
 	// 檢查是否有帳號使用此角色
 	var adminCount int64
-	db.GetRead().Model(&models.Admin{}).Where("role_id = ?", id).Count(&adminCount)
+	db.GetRead().Model(&models.AdminRole{}).Where("role_id = ?", id).Count(&adminCount)
 	if adminCount > 0 {
 		resp.Fail(http.StatusBadRequest, "該角色仍有帳號使用中，無法刪除").Send()
 		return

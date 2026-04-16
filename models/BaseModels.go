@@ -189,6 +189,7 @@ func AllModels() []interface{} {
 		&Permission{},
 		&RolePermission{},
 		&Admin{},
+		&AdminRole{},
 		// 輔助資料
 		&ProductBrand{},
 		&Brand{},
@@ -233,6 +234,14 @@ func AllModels() []interface{} {
 		&Modify{},
 		&ModifyItem{},
 		&ModifyItemSize{},
+		// 店櫃調撥
+		&Transfer{},
+		&TransferItem{},
+		&TransferItemSize{},
+		// 零售銷售
+		&RetailSell{},
+		&RetailSellItem{},
+		&RetailSellItemSize{},
 		// 收款對帳
 		&Gather{},
 		&GatherDetail{},
@@ -294,23 +303,37 @@ func MigrateAll(db *DBManager) error {
 		`).Error; err != nil {
 			return fmt.Errorf("重建調整庫存失敗: %w", err)
 		}
+		// 調撥扣庫存（調出方）
+		if err := tx.Exec(`
+			INSERT INTO product_size_stocks (product_id, customer_id, size_option_id, qty, created_at, updated_at)
+			SELECT ti.product_id, t.source_customer_id, tis.size_option_id,
+				SUM(-tis.qty),
+				NOW(), NOW()
+			FROM transfer_item_sizes tis
+			JOIN transfer_items ti ON ti.id = tis.transfer_item_id
+			JOIN transfers t ON t.id = ti.transfer_id AND t.deleted_at IS NULL
+			GROUP BY ti.product_id, t.source_customer_id, tis.size_option_id
+			ON CONFLICT (product_id, customer_id, size_option_id) DO UPDATE SET qty = product_size_stocks.qty + EXCLUDED.qty
+		`).Error; err != nil {
+			return fmt.Errorf("重建調撥扣庫存失敗: %w", err)
+		}
+		// 調撥加庫存（調入方）
+		if err := tx.Exec(`
+			INSERT INTO product_size_stocks (product_id, customer_id, size_option_id, qty, created_at, updated_at)
+			SELECT ti.product_id, ti.dest_customer_id, tis.size_option_id,
+				SUM(tis.qty),
+				NOW(), NOW()
+			FROM transfer_item_sizes tis
+			JOIN transfer_items ti ON ti.id = tis.transfer_item_id
+			JOIN transfers t ON t.id = ti.transfer_id AND t.deleted_at IS NULL
+			GROUP BY ti.product_id, ti.dest_customer_id, tis.size_option_id
+			ON CONFLICT (product_id, customer_id, size_option_id) DO UPDATE SET qty = product_size_stocks.qty + EXCLUDED.qty
+		`).Error; err != nil {
+			return fmt.Errorf("重建調撥加庫存失敗: %w", err)
+		}
 		return nil
 	}); err != nil {
 		return fmt.Errorf("重算庫存失敗: %w", err)
-	}
-
-	// 移除已廢棄的欄位（GORM AutoMigrate 不會自動刪除欄位）
-	dropCols := map[string][]string{
-		"orders":              {"vendor_id", "order_mode", "operation_id"},
-		"shipments":           {"vendor_id", "currency_code", "order_id", "shipment_note", "pay_amount"},
-		"product_size_stocks": {"stock_location_id"},
-	}
-	for table, cols := range dropCols {
-		for _, col := range cols {
-			db.GetWrite().Exec(fmt.Sprintf(
-				"ALTER TABLE %s DROP COLUMN IF EXISTS %s", table, col,
-			))
-		}
 	}
 
 	return nil

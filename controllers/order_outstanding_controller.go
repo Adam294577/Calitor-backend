@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"fmt"
+	"math"
 	"project/models"
 	response "project/services/responses"
 	"sort"
@@ -21,6 +22,10 @@ type orderOutstandingRow struct {
 	OrderID      int64          `json:"order_id,omitempty"`
 	OrderNo      string         `json:"order_no,omitempty"`
 	OrderIDs     []int64        `json:"order_ids,omitempty"`
+	CustomerCode string         `json:"customer_code,omitempty"`
+	CustomerName string         `json:"customer_name,omitempty"`
+	BrandName    string         `json:"brand_name,omitempty"`
+	ExpectedDate string         `json:"expected_date,omitempty"`
 }
 
 // outstandingSizeGroup 活躍的尺碼組（含完整 options）
@@ -47,11 +52,22 @@ func GetOrderOutstanding(c *gin.Context) {
 	dateTo := c.Query("date_to")
 	customerIDs := c.QueryArray("customer_id")    // 多選客戶
 	modelCodes := c.QueryArray("model_code")      // 多選型號
+	brandIDStrs := c.QueryArray("brand_id")       // 多選對帳品牌
 	expectedFrom := c.Query("expected_from")      // 預交日期起
 	expectedTo := c.Query("expected_to")          // 預交日期迄
 
-	// 1. 查 orders WHERE delivery_status < 2
-	query := db.GetRead().Model(&models.Order{}).Where("delivery_status < 2")
+	// 解析對帳品牌 ID
+	var brandIDs []int64
+	for _, s := range brandIDStrs {
+		if bid, err := strconv.ParseInt(s, 10, 64); err == nil {
+			brandIDs = append(brandIDs, bid)
+		}
+	}
+
+	// 1. 查 orders WHERE delivery_status < 2，排除隱藏客戶
+	query := db.GetRead().Model(&models.Order{}).
+		Joins("JOIN retail_customers ON retail_customers.id = orders.customer_id AND retail_customers.is_visible = true").
+		Where("delivery_status < 2")
 
 	if dateFrom != "" {
 		query = query.Where("order_date >= ?", dateFrom)
@@ -76,6 +92,7 @@ func GetOrderOutstanding(c *gin.Context) {
 	query.Preload("Customer").
 		Preload("Items.Sizes.SizeOption").
 		Preload("Items.Product").
+		Preload("Items.Product.Brand").
 		Preload("Items.SizeGroup").
 		Find(&orders)
 
@@ -144,18 +161,24 @@ func GetOrderOutstanding(c *gin.Context) {
 	type detailEntry struct {
 		orderID       int64
 		orderNo       string
+		customerCode  string
 		customerName  string
 		modelCode     string
 		sizeGroupCode string
 		orderPrice    float64
+		expectedDate  string
+		orderDate     string
+		brandName     string
 		sizes         map[string]int // key = position (1-based string)
 		totalQty      int
 	}
 	var details []detailEntry
 
 	for _, o := range orders {
+		customerCode := ""
 		customerName := ""
 		if o.Customer != nil {
+			customerCode = o.Customer.Code
 			customerName = o.Customer.ShortName
 			if customerName == "" {
 				customerName = o.Customer.Name
@@ -165,6 +188,22 @@ func GetOrderOutstanding(c *gin.Context) {
 		for _, item := range o.Items {
 			if item.CancelFlag == 2 || item.CancelFlag == 3 {
 				continue
+			}
+
+			// 對帳品牌過濾
+			if len(brandIDs) > 0 && item.Product != nil {
+				matched := false
+				if item.Product.BrandId != nil {
+					for _, bid := range brandIDs {
+						if *item.Product.BrandId == bid {
+							matched = true
+							break
+						}
+					}
+				}
+				if !matched {
+					continue
+				}
 			}
 
 			// 型號過濾
@@ -190,8 +229,12 @@ func GetOrderOutstanding(c *gin.Context) {
 			}
 
 			modelCode := ""
+			brandName := ""
 			if item.Product != nil {
 				modelCode = item.Product.ModelCode
+				if item.Product.Brand != nil {
+					brandName = item.Product.Brand.Name
+				}
 			}
 			sizeGroupCode := ""
 			if item.SizeGroup != nil {
@@ -226,10 +269,14 @@ func GetOrderOutstanding(c *gin.Context) {
 			details = append(details, detailEntry{
 				orderID:       o.ID,
 				orderNo:       o.OrderNo,
+				customerCode:  customerCode,
 				customerName:  customerName,
 				modelCode:     modelCode,
 				sizeGroupCode: sizeGroupCode,
 				orderPrice:    item.OrderPrice,
+				expectedDate:  item.ExpectedDate,
+				orderDate:     o.OrderDate,
+				brandName:     brandName,
 				sizes:         sizes,
 				totalQty:      itemTotalQty,
 			})
@@ -256,7 +303,19 @@ func GetOrderOutstanding(c *gin.Context) {
 		}
 	}
 
-	// 6. 組裝 rows
+	// 6. 依預交日期從早到晚排序，預交日為空時以訂貨日期替代
+	sort.Slice(details, func(i, j int) bool {
+		di := details[i].expectedDate
+		if di == "" {
+			di = details[i].orderDate
+		}
+		dj := details[j].expectedDate
+		if dj == "" {
+			dj = details[j].orderDate
+		}
+		return di < dj
+	})
+
 	var rows []orderOutstandingRow
 
 	if tab == "detail" {
@@ -268,19 +327,25 @@ func GetOrderOutstanding(c *gin.Context) {
 				SizeGroupCode: d.sizeGroupCode,
 				Sizes:         d.sizes,
 				TotalQty:      d.totalQty,
-				TotalAmount:   float64(d.totalQty) * d.orderPrice,
+				TotalAmount:   math.Round(float64(d.totalQty) * d.orderPrice),
 				OrderID:       d.orderID,
 				OrderNo:       d.orderNo,
+				CustomerCode:  d.customerCode,
+				CustomerName:  d.customerName,
+				BrandName:     d.brandName,
+				ExpectedDate:  d.expectedDate,
 			})
 		}
 	} else {
 		type aggEntry struct {
-			groupLabel    string
+			groupLabel  string
 			sizeGroupCode string
-			sizes         map[string]int
-			totalQty      int
-			totalAmount   float64
-			orderIDs      map[int64]bool
+			minSortDate string // 最早的預交日期，空時以訂貨日期替代
+			sizes       map[string]int
+			totalQty    int
+			totalAmount float64
+			orderIDs    map[int64]bool
+			brandName   string
 		}
 		aggMap := map[string]*aggEntry{}
 		var aggOrder []string
@@ -301,6 +366,7 @@ func GetOrderOutstanding(c *gin.Context) {
 					sizeGroupCode: d.sizeGroupCode,
 					sizes:         map[string]int{},
 					orderIDs:      map[int64]bool{},
+					brandName:     d.brandName,
 				}
 				aggMap[groupKey] = agg
 				aggOrder = append(aggOrder, groupKey)
@@ -310,9 +376,20 @@ func GetOrderOutstanding(c *gin.Context) {
 				agg.sizes[sizeKey] += qty
 			}
 			agg.totalQty += d.totalQty
-			agg.totalAmount += float64(d.totalQty) * d.orderPrice
+			agg.totalAmount += math.Round(float64(d.totalQty) * d.orderPrice)
 			agg.orderIDs[d.orderID] = true
+			sortDate := d.expectedDate
+			if sortDate == "" {
+				sortDate = d.orderDate
+			}
+			if sortDate != "" && (agg.minSortDate == "" || sortDate < agg.minSortDate) {
+				agg.minSortDate = sortDate
+			}
 		}
+
+		sort.Slice(aggOrder, func(i, j int) bool {
+			return aggMap[aggOrder[i]].minSortDate < aggMap[aggOrder[j]].minSortDate
+		})
 
 		for _, key := range aggOrder {
 			agg := aggMap[key]
@@ -327,6 +404,7 @@ func GetOrderOutstanding(c *gin.Context) {
 				TotalQty:      agg.totalQty,
 				TotalAmount:   agg.totalAmount,
 				OrderIDs:      ids,
+				BrandName:     agg.brandName,
 			})
 		}
 	}

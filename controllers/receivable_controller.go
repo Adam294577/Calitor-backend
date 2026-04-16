@@ -5,24 +5,47 @@ import (
 	"project/models"
 	response "project/services/responses"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
 // receivableRow 應收帳款查詢列
 type receivableRow struct {
-	ID                int64   `json:"id"`
-	ShipmentModeLabel string  `json:"shipment_mode_label"`
-	CloseMonth        string  `json:"close_month"`
-	ShipmentDate      string  `json:"shipment_date"`
-	ShipmentNo        string  `json:"shipment_no"`
-	TradeAmount       float64 `json:"trade_amount"`
-	TaxAmount         float64 `json:"tax_amount"`
-	DiscountAmount    float64 `json:"discount_amount"`
-	DealAmount        float64 `json:"deal_amount"`
-	AllowanceAmount   float64 `json:"allowance_amount"`
-	OtherDeduct       float64 `json:"other_deduct"`
-	ChargeAmount      float64 `json:"charge_amount"`
+	ID                int64                `json:"id"`
+	ShipmentModeLabel string               `json:"shipment_mode_label"`
+	CloseMonth        string               `json:"close_month"`
+	ShipmentDate      string               `json:"shipment_date"`
+	ShipmentNo        string               `json:"shipment_no"`
+	TradeAmount       float64              `json:"trade_amount"`
+	TaxAmount         float64              `json:"tax_amount"`
+	DiscountAmount    float64              `json:"discount_amount"`
+	DealAmount        float64              `json:"deal_amount"`
+	AllowanceAmount   float64              `json:"allowance_amount"`
+	OtherDeduct       float64              `json:"other_deduct"`
+	ChargeAmount      float64              `json:"charge_amount"`
+	TotalQty          int64                `json:"total_qty"`
+	Remark            string               `json:"remark"`
+	Items             []receivableItemLite `json:"items,omitempty"`
+}
+
+// receivableItemLite 明細列印用商品行
+type receivableItemLite struct {
+	ModelCode   string  `json:"model_code"`
+	TotalQty    int     `json:"total_qty"`
+	ShipPrice   float64 `json:"ship_price"`
+	TotalAmount float64 `json:"total_amount"`
+}
+
+// receivableCustomerInfo 列印用客戶資料
+type receivableCustomerInfo struct {
+	ID              int64  `json:"id"`
+	Code            string `json:"code"`
+	Name            string `json:"name"`
+	ShippingAddress string `json:"shipping_address"`
+	BillingAddress  string `json:"billing_address"`
+	Phone1          string `json:"phone1"`
+	Phone2          string `json:"phone2"`
 }
 
 // receivableFooter 應收帳款合計
@@ -60,6 +83,7 @@ func GetReceivables(c *gin.Context) {
 	closeMonthTo := c.Query("close_month_to")
 	dealModeStr := c.Query("deal_mode")
 	displayMode := c.DefaultQuery("display_mode", "all")
+	includeItems := c.Query("include_items") == "1"
 
 	// 1. 查 shipments
 	query := db.GetRead().Model(&models.Shipment{})
@@ -86,15 +110,15 @@ func GetReceivables(c *gin.Context) {
 			query = query.Where("deal_mode = ?", dm)
 		}
 	}
-	if displayMode == "unpaid" {
-		query = query.Where("deal_amount != charge_amount")
-	}
+	// unpaid 過濾移至組裝 rows 之後，需考慮折讓/其他扣額
 
 	var shipments []models.Shipment
 	query.Order("shipment_date ASC, id ASC").Find(&shipments)
 
-	// 2. 批次查 gather_details 聚合折讓/其他扣額
+	// 2. 批次查 gather_details 聚合折讓/其他扣額 + 雙數 + 明細
 	gatherMap := map[int64]gatherAgg{}
+	qtyMap := map[int64]int64{}
+	itemsMap := map[int64][]receivableItemLite{}
 	if len(shipments) > 0 {
 		shipIDs := make([]int64, len(shipments))
 		for i, s := range shipments {
@@ -115,6 +139,53 @@ func GetReceivables(c *gin.Context) {
 		for _, a := range aggs {
 			gatherMap[a.ShipmentID] = a
 		}
+
+		// 雙數（每張 shipment 的 size 總數量）
+		type qtyRow struct {
+			ShipmentID int64
+			TotalQty   int64
+		}
+		var qtyRows []qtyRow
+		db.GetRead().Raw(`
+			SELECT si.shipment_id, COALESCE(SUM(sis.qty), 0) as total_qty
+			FROM shipment_items si
+			LEFT JOIN shipment_item_sizes sis ON sis.shipment_item_id = si.id
+			WHERE si.shipment_id IN (?)
+			GROUP BY si.shipment_id
+		`, shipIDs).Scan(&qtyRows)
+		for _, q := range qtyRows {
+			qtyMap[q.ShipmentID] = q.TotalQty
+		}
+
+		// 明細（僅 include_items=1 時載入）
+		if includeItems {
+			type itemRow struct {
+				ShipmentID  int64
+				ItemOrder   int
+				ModelCode   string
+				ShipPrice   float64
+				TotalAmount float64
+				TotalQty    int
+			}
+			var itemRows []itemRow
+			db.GetRead().Raw(`
+				SELECT si.shipment_id, si.item_order, p.model_code,
+					si.ship_price, si.total_amount,
+					COALESCE((SELECT SUM(sis.qty) FROM shipment_item_sizes sis WHERE sis.shipment_item_id = si.id), 0) as total_qty
+				FROM shipment_items si
+				JOIN products p ON p.id = si.product_id
+				WHERE si.shipment_id IN (?)
+				ORDER BY si.shipment_id, si.item_order
+			`, shipIDs).Scan(&itemRows)
+			for _, it := range itemRows {
+				itemsMap[it.ShipmentID] = append(itemsMap[it.ShipmentID], receivableItemLite{
+					ModelCode:   it.ModelCode,
+					TotalQty:    it.TotalQty,
+					ShipPrice:   it.ShipPrice,
+					TotalAmount: it.TotalAmount,
+				})
+			}
+		}
 	}
 
 	// 3. 組裝 rows + 計算 footer
@@ -130,6 +201,14 @@ func GetReceivables(c *gin.Context) {
 		tradeAmount := s.DealAmount - s.TaxAmount + s.DiscountAmount
 		agg := gatherMap[s.ID]
 
+		// 未收 = 應收 - 已收 - 折讓 - 其他扣額
+		outstanding := s.DealAmount - s.ChargeAmount - agg.TotalAllowance - agg.TotalOther
+
+		// unpaid 模式：跳過已收齊的
+		if displayMode == "unpaid" && outstanding == 0 {
+			continue
+		}
+
 		row := receivableRow{
 			ID:                s.ID,
 			ShipmentModeLabel: label,
@@ -143,6 +222,11 @@ func GetReceivables(c *gin.Context) {
 			AllowanceAmount:   agg.TotalAllowance,
 			OtherDeduct:       agg.TotalOther,
 			ChargeAmount:      s.ChargeAmount,
+			TotalQty:          qtyMap[s.ID],
+			Remark:            s.Remark,
+		}
+		if includeItems {
+			row.Items = itemsMap[s.ID]
 		}
 		rows = append(rows, row)
 
@@ -155,23 +239,39 @@ func GetReceivables(c *gin.Context) {
 		footer.OtherDeductTotal += agg.TotalOther
 	}
 
-	footer.OutstandingTotal = footer.DealAmountTotal - footer.ChargeAmountTotal
+	footer.OutstandingTotal = footer.DealAmountTotal - footer.ChargeAmountTotal - footer.AllowanceTotal - footer.OtherDeductTotal
 
 	// 4. 期初帳款 / 預收貸款（需 customer_id + close_month_from）
 	if customerIDStr != "" && closeMonthFrom != "" {
 		cid, _ := strconv.ParseInt(customerIDStr, 10, 64)
 
-		priorQuery := db.GetRead().Model(&models.Shipment{}).
-			Where("customer_id = ? AND close_month < ? AND close_month != ''", cid, closeMonthFrom)
-
-		if dealModeStr != "" {
-			if dm, err := strconv.Atoi(dealModeStr); err == nil && (dm == 1 || dm == 2) {
-				priorQuery = priorQuery.Where("deal_mode = ?", dm)
-			}
-		}
-
 		var balance float64
-		priorQuery.Select("COALESCE(SUM(deal_amount - charge_amount), 0)").Scan(&balance)
+		db.GetRead().Raw(`
+			SELECT COALESCE(SUM(
+				s.deal_amount - s.charge_amount
+				- COALESCE(gd_agg.total_allowance, 0)
+				- COALESCE(gd_agg.total_other, 0)
+			), 0)
+			FROM shipments s
+			LEFT JOIN (
+				SELECT gd.shipment_id,
+					SUM(gd.discount_amount) as total_allowance,
+					SUM(gd.other_deduct) as total_other
+				FROM gather_details gd
+				JOIN gathers g ON g.id = gd.gather_id AND g.deleted_at IS NULL
+				GROUP BY gd.shipment_id
+			) gd_agg ON gd_agg.shipment_id = s.id
+			WHERE s.customer_id = ?
+				AND s.close_month < ?
+				AND s.close_month != ''
+				AND s.deleted_at IS NULL`+func() string {
+			if dealModeStr != "" {
+				if dm, err := strconv.Atoi(dealModeStr); err == nil && (dm == 1 || dm == 2) {
+					return " AND s.deal_mode = " + strconv.Itoa(dm)
+				}
+			}
+			return ""
+		}(), cid, closeMonthFrom).Scan(&balance)
 
 		balance = math.Round(balance*100) / 100
 		if balance > 0 {
@@ -213,8 +313,173 @@ func GetReceivables(c *gin.Context) {
 		footer.StatReceivable = footer.OutstandingTotal + footer.OpeningBalance - footer.PrepaidAmount
 	}
 
+	// 6. 客戶資料（列印需要）
+	var customerInfo *receivableCustomerInfo
+	if customerIDStr != "" {
+		if cid, err := strconv.ParseInt(customerIDStr, 10, 64); err == nil {
+			var c models.RetailCustomer
+			if err := db.GetRead().Where("id = ?", cid).First(&c).Error; err == nil {
+				customerInfo = &receivableCustomerInfo{
+					ID:              c.ID,
+					Code:            c.Code,
+					Name:            c.Name,
+					ShippingAddress: c.ShippingAddress,
+					BillingAddress:  c.BillingAddress,
+					Phone1:          c.Phone1,
+					Phone2:          c.Phone2,
+				}
+			}
+		}
+	}
+
 	resp.Success("成功").SetData(gin.H{
-		"rows":   rows,
-		"footer": footer,
+		"rows":     rows,
+		"footer":   footer,
+		"customer": customerInfo,
+	}).Send()
+}
+
+// agingRow 應收帳齡分析表單列（客戶 × 月份矩陣）
+type agingRow struct {
+	CustomerID       int64     `json:"customer_id"`
+	CustomerCode     string    `json:"customer_code"`
+	CustomerName     string    `json:"customer_name"`
+	MonthAmounts     []float64 `json:"month_amounts"`
+	OtherMonthAmount float64   `json:"other_month_amount"`
+	Total            float64   `json:"total"`
+}
+
+// GetReceivableAging 應收帳齡分析表
+// 以 base_month 為基準往前推 6 個月，列出各客戶每月未收金額（等同 receivable-query 未收顯示合計）
+func GetReceivableAging(c *gin.Context) {
+	resp := response.New(c)
+	db := models.PostgresNew()
+	defer db.Close()
+
+	baseMonth := c.Query("base_month")
+	if len(baseMonth) != 6 {
+		resp.Fail("base_month 格式錯誤，應為 YYYYMM").Send()
+		return
+	}
+
+	// 1. 計算 6 個月份字串（由新到舊）：[base, base-1, ..., base-5]
+	t, err := time.Parse("200601", baseMonth)
+	if err != nil {
+		resp.Fail("base_month 無法解析").Send()
+		return
+	}
+	months := make([]string, 6)
+	for i := 0; i < 6; i++ {
+		months[i] = t.AddDate(0, -i, 0).Format("200601")
+	}
+	earliestMonth := months[5]
+	monthIndex := map[string]int{}
+	for i, m := range months {
+		monthIndex[m] = i
+	}
+
+	// 2. GROUP BY customer + close_month 取得未收聚合
+	type aggRow struct {
+		CustomerID int64
+		CloseMonth string
+		Amount     float64
+	}
+	var aggs []aggRow
+	db.GetRead().Raw(`
+		SELECT s.customer_id,
+			s.close_month,
+			SUM(
+				s.deal_amount
+				- s.charge_amount
+				- COALESCE(gd.total_allowance, 0)
+				- COALESCE(gd.total_other, 0)
+			) AS amount
+		FROM shipments s
+		LEFT JOIN (
+			SELECT gd.shipment_id,
+				SUM(gd.discount_amount) AS total_allowance,
+				SUM(gd.other_deduct)    AS total_other
+			FROM gather_details gd
+			JOIN gathers g ON g.id = gd.gather_id AND g.deleted_at IS NULL
+			GROUP BY gd.shipment_id
+		) gd ON gd.shipment_id = s.id
+		WHERE s.deleted_at IS NULL
+			AND s.close_month <> ''
+			AND s.close_month <= ?
+		GROUP BY s.customer_id, s.close_month
+	`, baseMonth).Scan(&aggs)
+
+	// 3. 累加到客戶列
+	rowMap := map[int64]*agingRow{}
+	for _, a := range aggs {
+		row, ok := rowMap[a.CustomerID]
+		if !ok {
+			row = &agingRow{
+				CustomerID:   a.CustomerID,
+				MonthAmounts: make([]float64, 6),
+			}
+			rowMap[a.CustomerID] = row
+		}
+		amt := math.Round(a.Amount*100) / 100
+		if idx, isRecent := monthIndex[a.CloseMonth]; isRecent {
+			row.MonthAmounts[idx] += amt
+		} else if a.CloseMonth < earliestMonth {
+			row.OtherMonthAmount += amt
+		}
+	}
+
+	// 4. 計算 total 並過濾 total==0
+	filtered := make([]*agingRow, 0, len(rowMap))
+	custIDs := make([]int64, 0, len(rowMap))
+	for _, row := range rowMap {
+		total := row.OtherMonthAmount
+		for _, v := range row.MonthAmounts {
+			total += v
+		}
+		row.Total = math.Round(total*100) / 100
+		if row.Total == 0 {
+			continue
+		}
+		filtered = append(filtered, row)
+		custIDs = append(custIDs, row.CustomerID)
+	}
+
+	// 5. 批次查客戶編號/名稱
+	if len(custIDs) > 0 {
+		var customers []models.RetailCustomer
+		db.GetRead().Where("id IN (?)", custIDs).Find(&customers)
+		cmap := map[int64]models.RetailCustomer{}
+		for _, c := range customers {
+			cmap[c.ID] = c
+		}
+		for _, row := range filtered {
+			if c, ok := cmap[row.CustomerID]; ok {
+				row.CustomerCode = c.Code
+				row.CustomerName = c.Name
+			}
+		}
+	}
+
+	// 6. 依客戶編號排序
+	for i := 0; i < len(filtered); i++ {
+		for j := i + 1; j < len(filtered); j++ {
+			if filtered[i].CustomerCode > filtered[j].CustomerCode {
+				filtered[i], filtered[j] = filtered[j], filtered[i]
+			}
+		}
+	}
+
+	// 7. 計算 grand_total
+	var grandTotal float64
+	for _, row := range filtered {
+		grandTotal += row.Total
+	}
+	grandTotal = math.Round(grandTotal*100) / 100
+
+	resp.Success("成功").SetData(gin.H{
+		"base_month":  baseMonth,
+		"months":      months,
+		"rows":        filtered,
+		"grand_total": grandTotal,
 	}).Send()
 }

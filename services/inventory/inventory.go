@@ -1,6 +1,7 @@
 package inventory
 
 import (
+	"fmt"
 	"project/models"
 
 	"gorm.io/gorm"
@@ -64,4 +65,31 @@ type StockAdjustItem struct {
 type StockAdjustSize struct {
 	SizeOptionID int64
 	Qty          int
+}
+
+// CheckStockSufficient 檢查指定庫點是否有足夠庫存可扣
+// 回傳 nil 表示足夠；不足時回傳錯誤（訊息含商品 ID 與缺少數量）
+func CheckStockSufficient(tx *gorm.DB, customerID int64, items []StockAdjustItem) error {
+	for _, item := range items {
+		for _, size := range item.Sizes {
+			if size.Qty <= 0 {
+				continue
+			}
+			var stock models.ProductSizeStock
+			err := tx.Where("product_id = ? AND customer_id = ? AND size_option_id = ?",
+				item.ProductID, customerID, size.SizeOptionID).First(&stock).Error
+			if err == gorm.ErrRecordNotFound {
+				return fmt.Errorf("商品 ID %d 尺碼 %d 庫存不足（現有 0，需 %d）",
+					item.ProductID, size.SizeOptionID, size.Qty)
+			}
+			if err != nil {
+				return err
+			}
+			if stock.Qty < size.Qty {
+				return fmt.Errorf("商品 ID %d 尺碼 %d 庫存不足（現有 %d，需 %d）",
+					item.ProductID, size.SizeOptionID, stock.Qty, size.Qty)
+			}
+		}
+	}
+	return nil
 }

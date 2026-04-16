@@ -7,7 +7,9 @@ import (
 	"project/models"
 	"project/services/inventory"
 	response "project/services/responses"
+	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -21,6 +23,7 @@ func GetShipments(c *gin.Context) {
 
 	var items []models.Shipment
 	query := db.GetRead().
+		Joins("JOIN retail_customers ON retail_customers.id = shipments.customer_id AND retail_customers.is_visible = true").
 		Preload("Customer").
 		Preload("FillPerson").
 		Preload("Recorder").
@@ -163,6 +166,7 @@ func CreateShipment(c *gin.Context) {
 		InvoiceAmount   float64 `json:"invoice_amount"`
 		ChargeAmount    float64 `json:"charge_amount"`
 		ClientGoodID    string  `json:"client_good_id"`
+		InputMode       int     `json:"input_mode"`
 		Items           []struct {
 			ProductID   int64   `json:"product_id"`
 			SizeGroupID *int64  `json:"size_group_id"`
@@ -185,15 +189,10 @@ func CreateShipment(c *gin.Context) {
 		return
 	}
 
-	// 查詢客戶 BranchCode
+	// 查詢客戶
 	var customer models.RetailCustomer
 	if err := db.GetRead().Where("id = ?", req.CustomerID).First(&customer).Error; err != nil {
 		resp.Fail(http.StatusBadRequest, "客戶不存在").Send()
-		return
-	}
-
-	if customer.BranchCode == "" {
-		resp.Fail(http.StatusBadRequest, "客戶未設定貨點代碼，請先至客戶資料維護").Send()
 		return
 	}
 
@@ -234,9 +233,16 @@ func CreateShipment(c *gin.Context) {
 					cutoffMonth := fmt.Sprintf("%04d%02d", y, m)
 
 					var unclearedCount int64
-					db.GetRead().Model(&models.Shipment{}).
-						Where("customer_id = ? AND deleted_at IS NULL AND shipment_mode = 3 AND close_month <= ? AND deal_amount > charge_amount", req.CustomerID, cutoffMonth).
-						Count(&unclearedCount)
+					db.GetRead().Raw(`
+						SELECT COUNT(*) FROM shipments s
+						WHERE s.customer_id = ? AND s.deleted_at IS NULL AND s.shipment_mode = 3 AND s.close_month <= ?
+						AND s.deal_amount - s.charge_amount - COALESCE((
+							SELECT SUM(gd.discount_amount + gd.other_deduct)
+							FROM gather_details gd
+							JOIN gathers g ON g.id = gd.gather_id AND g.deleted_at IS NULL
+							WHERE gd.shipment_id = s.id
+						), 0) > 0
+					`, req.CustomerID, cutoffMonth).Scan(&unclearedCount)
 					if unclearedCount > 0 {
 						resp.Fail(http.StatusBadRequest, fmt.Sprintf("%s 月以前尚有 %d 筆未繳清出貨單，請先完成沖帳", cutoffMonth, unclearedCount)).Send()
 						return
@@ -259,7 +265,7 @@ func CreateShipment(c *gin.Context) {
 	if len(req.ShipmentDate) >= 6 {
 		yyyymm = req.ShipmentDate[:6]
 	}
-	noPrefix := prefix + customer.BranchCode + yyyymm
+	noPrefix := prefix + req.ShipStore + yyyymm
 
 	var maxNo string
 	db.GetRead().Unscoped().Model(&models.Shipment{}).
@@ -337,6 +343,10 @@ func CreateShipment(c *gin.Context) {
 		InvoiceAmount:   req.InvoiceAmount,
 		ChargeAmount:    req.ChargeAmount,
 		ClientGoodID:    req.ClientGoodID,
+		InputMode:       req.InputMode,
+	}
+	if shipment.InputMode == 0 {
+		shipment.InputMode = 1
 	}
 
 	err := db.GetWrite().Transaction(func(tx *gorm.DB) error {
@@ -386,8 +396,10 @@ func CreateShipment(c *gin.Context) {
 			// 追溯訂貨單
 			if reqItem.OrderItemID != nil {
 				var orderItem models.OrderItem
-				if tx.Where("id = ?", *reqItem.OrderItemID).First(&orderItem).Error == nil {
+				if err := tx.Where("id = ?", *reqItem.OrderItemID).First(&orderItem).Error; err == nil {
 					orderIDSet[orderItem.OrderID] = true
+				} else if err != gorm.ErrRecordNotFound {
+					return err
 				}
 			}
 		}
@@ -403,7 +415,9 @@ func CreateShipment(c *gin.Context) {
 		// 找庫點對應的客戶 ID
 		var storeCustomer models.RetailCustomer
 		if req.ShipStore != "" {
-			tx.Where("branch_code = ?", req.ShipStore).First(&storeCustomer)
+			if err := tx.Where("branch_code = ?", req.ShipStore).First(&storeCustomer).Error; err != nil && err != gorm.ErrRecordNotFound {
+				return err
+			}
 		}
 		if storeCustomer.ID > 0 {
 			multiplier := -1 // 出貨扣庫存
@@ -532,7 +546,9 @@ func UpdateShipment(c *gin.Context) {
 		// 還原舊庫存
 		var storeCustomerOld models.RetailCustomer
 		if existing.ShipStore != "" {
-			tx.Where("branch_code = ?", existing.ShipStore).First(&storeCustomerOld)
+			if err := tx.Where("branch_code = ?", existing.ShipStore).First(&storeCustomerOld).Error; err != nil && err != gorm.ErrRecordNotFound {
+				return err
+			}
 		}
 		if storeCustomerOld.ID > 0 {
 			oldMul := 1 // 出貨的舊資料要加回
@@ -540,7 +556,9 @@ func UpdateShipment(c *gin.Context) {
 				oldMul = -1 // 退貨的舊資料要扣回
 			}
 			var oldShipItems []models.ShipmentItem
-			tx.Preload("Sizes").Where("shipment_id = ?", id).Find(&oldShipItems)
+			if err := tx.Preload("Sizes").Where("shipment_id = ?", id).Find(&oldShipItems).Error; err != nil {
+				return err
+			}
 			var oldAdj []inventory.StockAdjustItem
 			for _, oi := range oldShipItems {
 				var sizes []inventory.StockAdjustSize
@@ -561,11 +579,17 @@ func UpdateShipment(c *gin.Context) {
 		}
 
 		var oldItemIDs []int64
-		tx.Model(&models.ShipmentItem{}).Where("shipment_id = ?", id).Pluck("id", &oldItemIDs)
-		if len(oldItemIDs) > 0 {
-			tx.Where("shipment_item_id IN ?", oldItemIDs).Delete(&models.ShipmentItemSize{})
+		if err := tx.Model(&models.ShipmentItem{}).Where("shipment_id = ?", id).Pluck("id", &oldItemIDs).Error; err != nil {
+			return err
 		}
-		tx.Where("shipment_id = ?", id).Delete(&models.ShipmentItem{})
+		if len(oldItemIDs) > 0 {
+			if err := tx.Where("shipment_item_id IN ?", oldItemIDs).Delete(&models.ShipmentItemSize{}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("shipment_id = ?", id).Delete(&models.ShipmentItem{}).Error; err != nil {
+			return err
+		}
 
 		adminId, _ := c.Get("AdminId")
 		recorderID := existing.RecorderID
@@ -647,7 +671,9 @@ func UpdateShipment(c *gin.Context) {
 		// 加入新庫存
 		var storeCustomerNew models.RetailCustomer
 		if req.ShipStore != "" {
-			tx.Where("branch_code = ?", req.ShipStore).First(&storeCustomerNew)
+			if err := tx.Where("branch_code = ?", req.ShipStore).First(&storeCustomerNew).Error; err != nil && err != gorm.ErrRecordNotFound {
+				return err
+			}
 		}
 		if storeCustomerNew.ID > 0 {
 			newMul := -1 // 出貨扣
@@ -749,7 +775,9 @@ func DeleteShipment(c *gin.Context) {
 		// 還原庫存：出貨要加回、退貨要扣回
 		var storeCustomer models.RetailCustomer
 		if shipment.ShipStore != "" {
-			tx.Where("branch_code = ?", shipment.ShipStore).First(&storeCustomer)
+			if err := tx.Where("branch_code = ?", shipment.ShipStore).First(&storeCustomer).Error; err != nil && err != gorm.ErrRecordNotFound {
+				return err
+			}
 		}
 		if storeCustomer.ID > 0 {
 			multiplier := 1 // 出貨刪除 → 加回庫存
@@ -757,7 +785,9 @@ func DeleteShipment(c *gin.Context) {
 				multiplier = -1 // 退貨刪除 → 扣回庫存
 			}
 			var shipItems []models.ShipmentItem
-			tx.Preload("Sizes").Where("shipment_id = ?", id).Find(&shipItems)
+			if err := tx.Preload("Sizes").Where("shipment_id = ?", id).Find(&shipItems).Error; err != nil {
+				return err
+			}
 			var adjItems []inventory.StockAdjustItem
 			for _, si := range shipItems {
 				var sizes []inventory.StockAdjustSize
@@ -825,5 +855,410 @@ func GetCustomerCredit(c *gin.Context) {
 	resp.Success("成功").SetData(map[string]interface{}{
 		"outstanding":  outstanding,
 		"credit_limit": customer.CreditLimit,
+	}).Send()
+}
+
+// BarcodeParse 條碼匯入解析：解析條碼、比對訂單未交量
+func BarcodeParse(c *gin.Context) {
+	resp := response.New(c)
+	db := models.PostgresNew()
+	defer db.Close()
+
+	var req struct {
+		CustomerID int64 `json:"customer_id" binding:"required"`
+		Entries    []struct {
+			Barcode string `json:"barcode"`
+			Qty     int    `json:"qty"`
+		} `json:"entries" binding:"required"`
+		SearchAll bool `json:"search_all"` // true=忽略訂貨單，直接依商品匹配
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
+		return
+	}
+
+	// 1. 查所有 SizeGroup + Options（依 sort_order 排序）
+	var sizeGroups []models.SizeGroup
+	db.GetRead().Preload("Options", func(d *gorm.DB) *gorm.DB {
+		return d.Order("sort_order ASC")
+	}).Find(&sizeGroups)
+
+	// 建立 SizeGroup.Code → SizeGroup 對照（code 從長到短排序，方便匹配）
+	type sgInfo struct {
+		ID      int64
+		Code    string
+		Options []models.SizeOption
+	}
+	var sgList []sgInfo
+	for _, sg := range sizeGroups {
+		sgList = append(sgList, sgInfo{ID: sg.ID, Code: sg.Code, Options: sg.Options})
+	}
+	sort.Slice(sgList, func(i, j int) bool {
+		return len(sgList[i].Code) > len(sgList[j].Code)
+	})
+
+	// 2. 解析每筆條碼 → model_code + sizeGroupCode + position
+	type parsedEntry struct {
+		Barcode       string
+		Qty           int
+		ModelCode     string
+		SizeGroupCode string
+		Position      int // 1-based
+		SizeGroupID   int64
+		SizeOptionID  int64
+		SizeLabel     string
+	}
+
+	type errorEntry struct {
+		Barcode string `json:"barcode"`
+		Reason  string `json:"reason"`
+	}
+
+	var parsed []parsedEntry
+	var errors []errorEntry
+
+	for _, entry := range req.Entries {
+		bc := strings.TrimSpace(entry.Barcode)
+		if bc == "" {
+			continue
+		}
+		qty := entry.Qty
+		if qty <= 0 {
+			qty = 1
+		}
+
+		// 嘗試從尾部匹配: {SizeGroupCode}{Position:02d}
+		matched := false
+		for _, sg := range sgList {
+			code := sg.Code
+			// 條碼尾部至少要有 code + 2 位數字，且前面還有 model_code
+			suffixLen := len(code) + 2
+			if len(bc) <= suffixLen {
+				continue
+			}
+			tail := bc[len(bc)-suffixLen:]
+			if !strings.HasPrefix(tail, code) {
+				continue
+			}
+			posStr := tail[len(code):]
+			pos, err := strconv.Atoi(posStr)
+			if err != nil || pos < 1 {
+				continue
+			}
+			// 確認 position 在範圍內
+			if pos > len(sg.Options) {
+				errors = append(errors, errorEntry{
+					Barcode: bc,
+					Reason:  fmt.Sprintf("尺碼位置超出範圍: 第%d格（共%d格）", pos, len(sg.Options)),
+				})
+				matched = true
+				break
+			}
+			opt := sg.Options[pos-1] // 0-based index
+			modelCode := bc[:len(bc)-suffixLen]
+
+			parsed = append(parsed, parsedEntry{
+				Barcode:       bc,
+				Qty:           qty,
+				ModelCode:     modelCode,
+				SizeGroupCode: code,
+				Position:      pos,
+				SizeGroupID:   sg.ID,
+				SizeOptionID:  opt.ID,
+				SizeLabel:     opt.Label,
+			})
+			matched = true
+			break
+		}
+		if !matched {
+			errors = append(errors, errorEntry{
+				Barcode: bc,
+				Reason:  "無法解析條碼格式",
+			})
+		}
+	}
+
+	// 3. 收集所有 model_code，批次查 Product
+	modelCodes := map[string]bool{}
+	for _, p := range parsed {
+		modelCodes[p.ModelCode] = true
+	}
+	var mcList []string
+	for mc := range modelCodes {
+		mcList = append(mcList, mc)
+	}
+
+	productMap := map[string]*models.Product{} // model_code → Product
+	if len(mcList) > 0 {
+		var products []models.Product
+		db.GetRead().Where("model_code IN ?", mcList).Find(&products)
+		for i := range products {
+			productMap[products[i].ModelCode] = &products[i]
+		}
+	}
+
+	// 4. 篩掉查無商品的，收集有效的 product_id
+	var validParsed []parsedEntry
+	for _, p := range parsed {
+		prod, ok := productMap[p.ModelCode]
+		if !ok {
+			errors = append(errors, errorEntry{
+				Barcode: p.Barcode,
+				Reason:  fmt.Sprintf("查無此商品: %s", p.ModelCode),
+			})
+			continue
+		}
+		_ = prod
+		validParsed = append(validParsed, p)
+	}
+
+	// resultItem 與組裝結果定義（搜尋全部商品模式也要用）
+	type resultItem struct {
+		Barcode        string  `json:"barcode"`
+		ModelCode      string  `json:"model_code"`
+		ProductID      int64   `json:"product_id"`
+		ProductName    string  `json:"product_name"`
+		SizeGroupID    int64   `json:"size_group_id"`
+		SizeGroupCode  string  `json:"size_group_code"`
+		SizeOptionID   int64   `json:"size_option_id"`
+		SizeLabel      string  `json:"size_label"`
+		Qty            int     `json:"qty"`
+		OrderItemID    int64   `json:"order_item_id"`
+		OrderNo        string  `json:"order_no"`
+		OutstandingQty int     `json:"outstanding_qty"`
+		SellPrice      float64 `json:"sell_price"`
+		Discount       float64 `json:"discount"`
+		ShipPrice      float64 `json:"ship_price"`
+		NonTaxPrice    float64 `json:"non_tax_price"`
+		Supplement     int     `json:"supplement"`
+		Status         string  `json:"status"` // "ok" or "warning"
+	}
+
+	// 搜尋全部商品模式：忽略訂貨單，直接依商品資料輸出
+	if req.SearchAll {
+		type mergeKey struct {
+			ProductID    int64
+			SizeOptionID int64
+		}
+		mergeMap := map[mergeKey]*resultItem{}
+		var order []mergeKey
+		for _, p := range validParsed {
+			prod := productMap[p.ModelCode]
+			k := mergeKey{ProductID: prod.ID, SizeOptionID: p.SizeOptionID}
+			if r, ok := mergeMap[k]; ok {
+				r.Qty += p.Qty
+				continue
+			}
+			mergeMap[k] = &resultItem{
+				Barcode:       p.Barcode,
+				ModelCode:     p.ModelCode,
+				ProductID:     prod.ID,
+				ProductName:   prod.NameSpec,
+				SizeGroupID:   p.SizeGroupID,
+				SizeGroupCode: p.SizeGroupCode,
+				SizeOptionID:  p.SizeOptionID,
+				SizeLabel:     p.SizeLabel,
+				Qty:           p.Qty,
+				SellPrice:     prod.MSRP,
+				ShipPrice:     prod.Wholesale,
+				NonTaxPrice:   prod.Wholesale,
+				Status:        "ok",
+			}
+			order = append(order, k)
+		}
+		var resultItems []resultItem
+		for _, k := range order {
+			resultItems = append(resultItems, *mergeMap[k])
+		}
+		resp.Success("成功").SetData(map[string]interface{}{
+			"items":  resultItems,
+			"errors": errors,
+		}).Send()
+		return
+	}
+
+	// 5. 查該客戶未交訂單的 OrderItem（含 Sizes）
+	var productIDs []int64
+	for _, mc := range mcList {
+		if prod, ok := productMap[mc]; ok {
+			productIDs = append(productIDs, prod.ID)
+		}
+	}
+
+	var orderItems []models.OrderItem
+	if len(productIDs) > 0 {
+		db.GetRead().
+			Where("order_items.cancel_flag < 2 AND order_items.product_id IN ?", productIDs).
+			Joins("JOIN orders ON orders.id = order_items.order_id AND orders.deleted_at IS NULL AND orders.delivery_status < 2 AND orders.customer_id = ?", req.CustomerID).
+			Preload("Sizes").
+			Order("order_items.id ASC"). // FIFO: 舊訂單優先
+			Find(&orderItems)
+	}
+
+	// 查訂單號
+	orderIDSet := map[int64]bool{}
+	for _, oi := range orderItems {
+		orderIDSet[oi.OrderID] = true
+	}
+	orderNoMap := map[int64]string{}
+	if len(orderIDSet) > 0 {
+		var oids []int64
+		for oid := range orderIDSet {
+			oids = append(oids, oid)
+		}
+		type oref struct {
+			ID      int64
+			OrderNo string
+		}
+		var refs []oref
+		db.GetRead().Model(&models.Order{}).Select("id, order_no").Where("id IN ?", oids).Scan(&refs)
+		for _, r := range refs {
+			orderNoMap[r.ID] = r.OrderNo
+		}
+	}
+
+	// 查已出貨量
+	var allItemIDs []int64
+	for _, oi := range orderItems {
+		allItemIDs = append(allItemIDs, oi.ID)
+	}
+	shipped := ShippedQtyMap(db.GetRead(), allItemIDs)
+
+	// 6. 建立 (product_id, size_option_id) → []候選 OrderItem 的對照
+	type candidate struct {
+		OrderItemID  int64
+		OrderID      int64
+		OrderNo      string
+		SizeGroupID  int64
+		SizeOptionID int64
+		Outstanding  int
+		AdvicePrice  float64
+		Discount     float64
+		OrderPrice   float64
+		NonTaxPrice  float64
+		Supplement   int
+	}
+	candidateMap := map[string][]candidate{} // key: "productID-sizeOptionID"
+
+	for _, oi := range orderItems {
+		sgID := int64(0)
+		if oi.SizeGroupID != nil {
+			sgID = *oi.SizeGroupID
+		}
+		for _, sz := range oi.Sizes {
+			key := fmt.Sprintf("%d-%d", oi.ProductID, sz.SizeOptionID)
+			shippedKey := fmt.Sprintf("%d-%d", oi.ID, sz.SizeOptionID)
+			outstanding := sz.Qty - shipped[shippedKey]
+			if outstanding <= 0 {
+				continue
+			}
+			candidateMap[key] = append(candidateMap[key], candidate{
+				OrderItemID:  oi.ID,
+				OrderID:      oi.OrderID,
+				OrderNo:      orderNoMap[oi.OrderID],
+				SizeGroupID:  sgID,
+				SizeOptionID: sz.SizeOptionID,
+				Outstanding:  outstanding,
+				AdvicePrice:  oi.AdvicePrice,
+				Discount:     oi.Discount,
+				OrderPrice:   oi.OrderPrice,
+				NonTaxPrice:  oi.NonTaxPrice,
+				Supplement:   oi.Supplement,
+			})
+		}
+	}
+
+	// 7. 分配每筆掃描結果到訂單（FIFO），追蹤已分配量
+	// 追蹤每個 candidate 已分配的量
+	allocated := map[string]int{} // key: "orderItemID-sizeOptionID" → 已分配
+
+	var resultItems []resultItem
+
+	for _, p := range validParsed {
+		prod := productMap[p.ModelCode]
+		candKey := fmt.Sprintf("%d-%d", prod.ID, p.SizeOptionID)
+		candidates, hasCand := candidateMap[candKey]
+
+		if !hasCand || len(candidates) == 0 {
+			errors = append(errors, errorEntry{
+				Barcode: p.Barcode,
+				Reason:  fmt.Sprintf("此客戶無此商品+尺碼的未交訂單 (%s 尺碼%s)", p.ModelCode, p.SizeLabel),
+			})
+			continue
+		}
+
+		remaining := p.Qty
+		for _, cand := range candidates {
+			if remaining <= 0 {
+				break
+			}
+			allocKey := fmt.Sprintf("%d-%d", cand.OrderItemID, cand.SizeOptionID)
+			used := allocated[allocKey]
+			avail := cand.Outstanding - used
+			if avail <= 0 {
+				continue
+			}
+
+			take := remaining
+			status := "ok"
+			if take > avail {
+				take = avail
+				// 還有剩餘，繼續分配到下一個訂單
+			}
+
+			allocated[allocKey] += take
+			remaining -= take
+
+			resultItems = append(resultItems, resultItem{
+				Barcode:        p.Barcode,
+				ModelCode:      p.ModelCode,
+				ProductID:      prod.ID,
+				ProductName:    prod.NameSpec,
+				SizeGroupID:    cand.SizeGroupID,
+				SizeGroupCode:  p.SizeGroupCode,
+				SizeOptionID:   cand.SizeOptionID,
+				SizeLabel:      p.SizeLabel,
+				Qty:            take,
+				OrderItemID:    cand.OrderItemID,
+				OrderNo:        cand.OrderNo,
+				OutstandingQty: cand.Outstanding,
+				SellPrice:      cand.AdvicePrice,
+				Discount:       cand.Discount,
+				ShipPrice:      cand.OrderPrice,
+				NonTaxPrice:    cand.NonTaxPrice,
+				Supplement:     cand.Supplement,
+				Status:         status,
+			})
+		}
+
+		// 如果還有剩餘，全部分到最後一個訂單但標記 warning
+		if remaining > 0 {
+			lastCand := candidates[len(candidates)-1]
+			resultItems = append(resultItems, resultItem{
+				Barcode:        p.Barcode,
+				ModelCode:      p.ModelCode,
+				ProductID:      prod.ID,
+				ProductName:    prod.NameSpec,
+				SizeGroupID:    lastCand.SizeGroupID,
+				SizeGroupCode:  p.SizeGroupCode,
+				SizeOptionID:   lastCand.SizeOptionID,
+				SizeLabel:      p.SizeLabel,
+				Qty:            remaining,
+				OrderItemID:    lastCand.OrderItemID,
+				OrderNo:        lastCand.OrderNo,
+				OutstandingQty: lastCand.Outstanding,
+				SellPrice:      lastCand.AdvicePrice,
+				Discount:       lastCand.Discount,
+				ShipPrice:      lastCand.OrderPrice,
+				NonTaxPrice:    lastCand.NonTaxPrice,
+				Supplement:     lastCand.Supplement,
+				Status:         "warning",
+			})
+		}
+	}
+
+	resp.Success("成功").SetData(map[string]interface{}{
+		"items":  resultItems,
+		"errors": errors,
 	}).Send()
 }

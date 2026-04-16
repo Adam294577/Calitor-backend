@@ -388,7 +388,9 @@ func UpdateStock(c *gin.Context) {
 			oldMultiplier = 1 // 退貨的舊資料要加回
 		}
 		var oldItems []models.StockItem
-		tx.Preload("Sizes").Where("stock_id = ?", id).Find(&oldItems)
+		if err := tx.Preload("Sizes").Where("stock_id = ?", id).Find(&oldItems).Error; err != nil {
+			return err
+		}
 		var oldAdjust []inventory.StockAdjustItem
 		for _, oi := range oldItems {
 			var sizes []inventory.StockAdjustSize
@@ -409,11 +411,17 @@ func UpdateStock(c *gin.Context) {
 
 		// 刪除舊的 Sizes 和 Items
 		var oldItemIDs []int64
-		tx.Model(&models.StockItem{}).Where("stock_id = ?", id).Pluck("id", &oldItemIDs)
-		if len(oldItemIDs) > 0 {
-			tx.Where("stock_item_id IN ?", oldItemIDs).Delete(&models.StockItemSize{})
+		if err := tx.Model(&models.StockItem{}).Where("stock_id = ?", id).Pluck("id", &oldItemIDs).Error; err != nil {
+			return err
 		}
-		tx.Where("stock_id = ?", id).Delete(&models.StockItem{})
+		if len(oldItemIDs) > 0 {
+			if err := tx.Where("stock_item_id IN ?", oldItemIDs).Delete(&models.StockItemSize{}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("stock_id = ?", id).Delete(&models.StockItem{}).Error; err != nil {
+			return err
+		}
 
 		// 系統紀錄者
 		adminId, _ := c.Get("AdminId")
@@ -549,6 +557,33 @@ func DeleteStock(c *gin.Context) {
 	}
 
 	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
+		// 還原庫存：進貨刪除要扣回、退貨刪除要加回
+		multiplier := -1 // 進貨刪除 → 扣回庫存
+		if stock.StockMode == 2 {
+			multiplier = 1 // 退貨刪除 → 加回庫存
+		}
+		var stockItems []models.StockItem
+		if err := tx.Preload("Sizes").Where("stock_id = ?", id).Find(&stockItems).Error; err != nil {
+			return err
+		}
+		var adjItems []inventory.StockAdjustItem
+		for _, si := range stockItems {
+			var sizes []inventory.StockAdjustSize
+			for _, s := range si.Sizes {
+				if s.Qty > 0 {
+					sizes = append(sizes, inventory.StockAdjustSize{SizeOptionID: s.SizeOptionID, Qty: s.Qty})
+				}
+			}
+			if len(sizes) > 0 {
+				adjItems = append(adjItems, inventory.StockAdjustItem{ProductID: si.ProductID, Sizes: sizes})
+			}
+		}
+		if len(adjItems) > 0 {
+			if err := inventory.AdjustStockBatch(tx, stock.CustomerID, adjItems, multiplier); err != nil {
+				return err
+			}
+		}
+
 		if err := tx.Delete(&models.Stock{}, id).Error; err != nil {
 			return err
 		}
