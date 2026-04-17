@@ -156,6 +156,7 @@ func CreateShipment(c *gin.Context) {
 		DealMode        int     `json:"deal_mode"`
 		ShipStore       string  `json:"ship_store"`
 		FillPersonID    *int64  `json:"fill_person_id"`
+		SalesmanID      *int64  `json:"salesman_id"`
 		CloseMonth      string  `json:"close_month"`
 		Remark          string  `json:"remark"`
 		TaxMode         int     `json:"tax_mode"`
@@ -328,6 +329,7 @@ func CreateShipment(c *gin.Context) {
 		DealMode:        req.DealMode,
 		ShipStore:       req.ShipStore,
 		FillPersonID:    req.FillPersonID,
+		SalesmanID:      req.SalesmanID,
 		RecorderID:      recorderID,
 		CloseMonth:      closeMonth,
 		Remark:          req.Remark,
@@ -493,6 +495,7 @@ func UpdateShipment(c *gin.Context) {
 		DealMode        int     `json:"deal_mode"`
 		ShipStore       string  `json:"ship_store"`
 		FillPersonID    *int64  `json:"fill_person_id"`
+		SalesmanID      *int64  `json:"salesman_id"`
 		CloseMonth      string  `json:"close_month"`
 		Remark          string  `json:"remark"`
 		TaxMode         int     `json:"tax_mode"`
@@ -602,6 +605,7 @@ func UpdateShipment(c *gin.Context) {
 			"deal_mode":        req.DealMode,
 			"ship_store":       req.ShipStore,
 			"fill_person_id":   req.FillPersonID,
+			"salesman_id":      req.SalesmanID,
 			"recorder_id":      recorderID,
 			"close_month":      req.CloseMonth,
 			"remark":           req.Remark,

@@ -18,6 +18,8 @@ type RetailCustomer struct {
 	Name               string         `gorm:"type:varchar(200);not null" json:"name"`
 	ShortName          string         `gorm:"type:varchar(100)" json:"short_name"`
 	Category           string         `gorm:"type:varchar(100)" json:"category"`
+	SalesmanID         *int64         `gorm:"index" json:"salesman_id"`
+	Salesman           *Admin         `gorm:"foreignKey:SalesmanID" json:"salesman,omitempty"`
 	Month              string         `gorm:"type:varchar(20)" json:"month"`
 	ClosingDate        int            `gorm:"default:26" json:"closing_date"`
 	TaxId              string         `gorm:"type:varchar(20)" json:"tax_id"`

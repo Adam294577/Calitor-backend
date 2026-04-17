@@ -21,6 +21,8 @@ type Shipment struct {
 	ShipStore       string          `gorm:"type:varchar(20)" json:"ship_store"`                      // 出貨庫點 (branch_code)
 	FillPersonID    *int64          `gorm:"index" json:"fill_person_id"`
 	FillPerson      *Admin          `gorm:"foreignKey:FillPersonID" json:"fill_person,omitempty"`
+	SalesmanID      *int64          `gorm:"index" json:"salesman_id"`
+	Salesman        *Admin          `gorm:"foreignKey:SalesmanID" json:"salesman,omitempty"`
 	RecorderID      int64           `gorm:"not null;index" json:"recorder_id"`
 	Recorder        *Admin          `gorm:"foreignKey:RecorderID" json:"recorder,omitempty"`
 	CloseMonth      string          `gorm:"type:varchar(10)" json:"close_month"`

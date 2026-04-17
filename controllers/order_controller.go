@@ -146,6 +146,7 @@ func CreateOrder(c *gin.Context) {
 		OrderDate     string  `json:"order_date" binding:"required"`
 		CustomerID    int64   `json:"customer_id" binding:"required"`
 		FillPersonID  *int64  `json:"fill_person_id"`
+		SalesmanID    *int64  `json:"salesman_id"`
 		DealMode      int     `json:"deal_mode"`
 		ClientOrderID string  `json:"client_order_id"`
 		BrandID       *int64  `json:"brand_id"`
@@ -217,6 +218,7 @@ func CreateOrder(c *gin.Context) {
 		OrderDate:     req.OrderDate,
 		CustomerID:    req.CustomerID,
 		FillPersonID:  req.FillPersonID,
+		SalesmanID:    req.SalesmanID,
 		RecorderID:    recorderID,
 		DealMode:      req.DealMode,
 		ClientOrderID: req.ClientOrderID,
@@ -299,6 +301,7 @@ func UpdateOrder(c *gin.Context) {
 		OrderDate     string  `json:"order_date"`
 		CustomerID    int64   `json:"customer_id"`
 		FillPersonID  *int64  `json:"fill_person_id"`
+		SalesmanID    *int64  `json:"salesman_id"`
 		DealMode      int     `json:"deal_mode"`
 		ClientOrderID string  `json:"client_order_id"`
 		BrandID       *int64  `json:"brand_id"`
@@ -387,6 +390,7 @@ func UpdateOrder(c *gin.Context) {
 		updates := map[string]interface{}{
 			"order_date":      req.OrderDate,
 			"fill_person_id":  req.FillPersonID,
+			"salesman_id":     req.SalesmanID,
 			"recorder_id":     recorderID,
 			"deal_mode":       req.DealMode,
 			"client_order_id": req.ClientOrderID,

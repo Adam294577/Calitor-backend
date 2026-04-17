@@ -18,6 +18,8 @@ type Order struct {
 	Customer       *RetailCustomer `gorm:"foreignKey:CustomerID" json:"customer,omitempty"`
 	FillPersonID   *int64          `gorm:"index" json:"fill_person_id"`
 	FillPerson     *Admin          `gorm:"foreignKey:FillPersonID" json:"fill_person,omitempty"`
+	SalesmanID     *int64          `gorm:"index" json:"salesman_id"`
+	Salesman       *Admin          `gorm:"foreignKey:SalesmanID" json:"salesman,omitempty"`
 	RecorderID     int64           `gorm:"not null;index" json:"recorder_id"`
 	Recorder       *Admin          `gorm:"foreignKey:RecorderID" json:"recorder,omitempty"`
 	DealMode       int             `gorm:"default:1" json:"deal_mode"`                         // 1=買斷 2=寄賣
