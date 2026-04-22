@@ -2,7 +2,6 @@ package routes
 
 import (
 	"fmt"
-	"net/http"
 	"project/controllers"
 	"project/middlewares"
 	response "project/services/responses"
@@ -18,39 +17,28 @@ func RouterRegister(route *gin.Engine) {
 		resp.Success("成功").Send()
 	})
 
-	// DEBUG: 顯示所有 IP 來源，確認後移除
-	route.GET("/debug/ip", func(ctx *gin.Context) {
-		ctx.JSON(http.StatusOK, gin.H{
-			"RemoteIP":         ctx.RemoteIP(),
-			"ClientIP":         ctx.ClientIP(),
-			"CF-Connecting-IP": ctx.GetHeader("CF-Connecting-IP"),
-			"X-Forwarded-For":  ctx.GetHeader("X-Forwarded-For"),
-			"X-Real-IP":        ctx.GetHeader("X-Real-IP"),
-		})
-	})
-
 	// 檔案代理（MinIO proxy，公開存取）
 	route.GET("/api/file/*path", controllers.ServeFile)
 
-	// 開發環境專用路由（僅 config 包含 "dev" 時註冊）
-	// if strings.Contains(viper.ConfigFileUsed(), "dev") {
-	// dev := route.Group("/api/dev")
-	// {
-	// dev.POST("/migrate", controllers.Migrate)
-	// 	dev.POST("/seed-postal-areas", controllers.SeedPostalAreas)
-	// 	dev.POST("/seed-product-categories", controllers.SeedProductCategories)
-	// 	dev.POST("/seed-vendors", controllers.SeedVendors)
-	// 	dev.POST("/seed-size-groups", controllers.SeedSizeGroups)
-	// 	dev.POST("/seed-material-options", controllers.SeedMaterialOptions)
-	// dev.POST("/cleanup-orphan-images", controllers.CleanupOrphanImages)
-	// 	dev.POST("/reset-super-admin", controllers.ResetSuperAdmin)
-	// }
-	// }
+	// 開發環境專用路由
+	dev := route.Group("/api/dev")
+	{
+		dev.POST("/fix-shipment-no", controllers.FixShipmentNo)
+		// dev.POST("/migrate", controllers.Migrate)
+		// dev.POST("/seed-products", controllers.SeedProducts)
+		// dev.POST("/seed-postal-areas", controllers.SeedPostalAreas)
+		// dev.POST("/seed-product-categories", controllers.SeedProductCategories)
+		// dev.POST("/seed-vendors", controllers.SeedVendors)
+		// dev.POST("/seed-size-groups", controllers.SeedSizeGroups)
+		// dev.POST("/seed-material-options", controllers.SeedMaterialOptions)
+		// dev.POST("/cleanup-orphan-images", controllers.CleanupOrphanImages)
+		// dev.POST("/reset-super-admin", controllers.ResetSuperAdmin)
+	}
 
 	admin := route.Group("/api/admin")
 	{
 		// 公開路由
-		admin.POST("/login", controllers.Login)
+		admin.POST("/login", middlewares.LoginRateLimit(), controllers.Login)
 	}
 
 	adminAuth := route.Group("/api/admin")
@@ -145,20 +133,22 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.PUT("/material-options/:id", middlewares.RequirePermission("material-options.edit"), controllers.UpdateMaterialOption)
 		adminAuth.DELETE("/material-options/:id", middlewares.RequirePermission("material-options.delete"), controllers.DeleteMaterialOption)
 
-		// 輔助資料 - 庫點
-		adminAuth.GET("/stock-locations", middlewares.RequirePermission("stock-locations.view"), controllers.GetStockLocations)
-		adminAuth.POST("/stock-locations", middlewares.RequirePermission("stock-locations.create"), controllers.CreateStockLocation)
-		adminAuth.PUT("/stock-locations/:id", middlewares.RequirePermission("stock-locations.edit"), controllers.UpdateStockLocation)
-		adminAuth.DELETE("/stock-locations/:id", middlewares.RequirePermission("stock-locations.delete"), controllers.DeleteStockLocation)
+		// 主檔 - 銀行帳號
+		adminAuth.GET("/banks", middlewares.RequirePermission("banks.view"), controllers.GetBanks)
+		adminAuth.POST("/banks", middlewares.RequirePermission("banks.create"), controllers.CreateBank)
+		adminAuth.PUT("/banks/:id", middlewares.RequirePermission("banks.edit"), controllers.UpdateBank)
+		adminAuth.DELETE("/banks/:id", middlewares.RequirePermission("banks.delete"), controllers.DeleteBank)
 
 		// 主檔 - 客戶
 		adminAuth.GET("/customers", middlewares.RequirePermission("customers.view"), controllers.GetCustomers)
+		adminAuth.GET("/customers/options", controllers.GetCustomerOptions)
 		adminAuth.POST("/customers", middlewares.RequirePermission("customers.create"), controllers.CreateCustomer)
 		adminAuth.PUT("/customers/:id", middlewares.RequirePermission("customers.edit"), controllers.UpdateCustomer)
 		adminAuth.DELETE("/customers/:id", middlewares.RequirePermission("customers.delete"), controllers.DeleteCustomer)
 
 		// 主檔 - 廠商
 		adminAuth.GET("/vendors", middlewares.RequirePermission("vendor-mgmt.view"), controllers.GetVendors)
+		adminAuth.GET("/vendors/options", controllers.GetVendorOptions)
 		adminAuth.POST("/vendors", middlewares.RequirePermission("vendor-mgmt.create"), controllers.CreateVendor)
 		adminAuth.PUT("/vendors/:id", middlewares.RequirePermission("vendor-mgmt.edit"), controllers.UpdateVendor)
 		adminAuth.DELETE("/vendors/:id", middlewares.RequirePermission("vendor-mgmt.delete"), controllers.DeleteVendor)
@@ -168,12 +158,119 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.POST("/members", middlewares.RequirePermission("member-mgmt.create"), controllers.CreateMember)
 		adminAuth.PUT("/members/:id", middlewares.RequirePermission("member-mgmt.edit"), controllers.UpdateMember)
 		adminAuth.DELETE("/members/:id", middlewares.RequirePermission("member-mgmt.delete"), controllers.DeleteMember)
+		adminAuth.GET("/members/:id/transactions", middlewares.RequirePermission("member-mgmt.view"), controllers.GetMemberTransactions)
 
 		// 主檔 - 商品
 		adminAuth.GET("/products", middlewares.RequirePermission("product-mgmt.view"), controllers.GetProducts)
+		adminAuth.GET("/products/:id", middlewares.RequirePermission("product-mgmt.view"), controllers.GetProduct)
 		adminAuth.POST("/products", middlewares.RequirePermission("product-mgmt.create"), controllers.CreateProduct)
 		adminAuth.PUT("/products/:id", middlewares.RequirePermission("product-mgmt.edit"), controllers.UpdateProduct)
 		adminAuth.DELETE("/products/:id", middlewares.RequirePermission("product-mgmt.delete"), controllers.DeleteProduct)
+
+		// 商品搜尋（供採購單、訂貨單等作業用）
+		adminAuth.GET("/products/search", controllers.SearchProducts)
+
+		// 日常作業 - 採購未交統計
+		adminAuth.GET("/purchases/outstanding", middlewares.RequirePermission("purchase-outstanding.view"), controllers.GetPurchaseOutstanding)
+
+		// 日常作業 - 廠商採購
+		adminAuth.GET("/purchases", middlewares.RequirePermission("purchases.view"), controllers.GetPurchases)
+		adminAuth.GET("/purchases/:id", middlewares.RequirePermission("purchases.view"), controllers.GetPurchase)
+		adminAuth.POST("/purchases", middlewares.RequirePermission("purchases.create"), controllers.CreatePurchase)
+		adminAuth.PUT("/purchases/:id", middlewares.RequirePermission("purchases.edit"), controllers.UpdatePurchase)
+		adminAuth.DELETE("/purchases/:id", middlewares.RequirePermission("purchases.delete"), controllers.DeletePurchase)
+
+		// 採購單搜尋（供進貨單選擇關聯採購）
+		adminAuth.GET("/purchases/search", middlewares.RequirePermission("stocks.view"), controllers.SearchPurchases)
+
+		// 日常作業 - 廠商進貨
+		adminAuth.GET("/stocks", middlewares.RequirePermission("stocks.view"), controllers.GetStocks)
+		// 廠商進貨統計（需在 :id 路由之前註冊）
+		adminAuth.GET("/stocks/summary", middlewares.RequirePermission("vendor-stock-summary.view"), controllers.GetStockSummary)
+		adminAuth.GET("/stocks/:id", middlewares.RequirePermission("stocks.view"), controllers.GetStock)
+		adminAuth.POST("/stocks", middlewares.RequirePermission("stocks.create"), controllers.CreateStock)
+		adminAuth.PUT("/stocks/:id", middlewares.RequirePermission("stocks.edit"), controllers.UpdateStock)
+		adminAuth.DELETE("/stocks/:id", middlewares.RequirePermission("stocks.delete"), controllers.DeleteStock)
+
+		// 日常作業 - 客戶訂貨
+		adminAuth.GET("/orders", middlewares.RequirePermission("orders.view"), controllers.GetOrders)
+		adminAuth.POST("/orders", middlewares.RequirePermission("orders.create"), controllers.CreateOrder)
+		// 訂貨未交統計（需在 :id 路由之前註冊）
+		adminAuth.GET("/orders/outstanding", middlewares.RequirePermission("order-outstanding.view"), controllers.GetOrderOutstanding)
+		// 訂貨單搜尋（供出貨單選擇關聯訂貨）
+		adminAuth.GET("/orders/search", middlewares.RequirePermission("shipments.view"), controllers.SearchOrders)
+		// 訂貨明細搜尋（供出貨單逐筆選擇商品用）
+		adminAuth.GET("/orders/search-items", middlewares.RequirePermission("shipments.view"), controllers.SearchOrderItems)
+		adminAuth.GET("/orders/:id", middlewares.RequirePermission("orders.view"), controllers.GetOrder)
+		adminAuth.PUT("/orders/:id", middlewares.RequirePermission("orders.edit"), controllers.UpdateOrder)
+		adminAuth.DELETE("/orders/:id", middlewares.RequirePermission("orders.delete"), controllers.DeleteOrder)
+		adminAuth.PUT("/orders/:id/stop", middlewares.RequirePermission("orders.edit"), controllers.StopOrder)
+
+		// 日常作業 - 客戶出貨
+		adminAuth.GET("/shipments", middlewares.RequirePermission("shipments.view"), controllers.GetShipments)
+		// 客戶出貨統計（需在 :id 路由之前註冊）
+		adminAuth.GET("/shipments/summary", middlewares.RequirePermission("customer-shipment-summary.view"), controllers.GetShipmentSummary)
+		adminAuth.GET("/shipments/:id", middlewares.RequirePermission("shipments.view"), controllers.GetShipment)
+		adminAuth.POST("/shipments", middlewares.RequirePermission("shipments.create"), controllers.CreateShipment)
+		adminAuth.PUT("/shipments/:id", middlewares.RequirePermission("shipments.edit"), controllers.UpdateShipment)
+		adminAuth.DELETE("/shipments/:id", middlewares.RequirePermission("shipments.delete"), controllers.DeleteShipment)
+		adminAuth.GET("/shipments/credit/:customer_id", middlewares.RequirePermission("shipments.view"), controllers.GetCustomerCredit)
+		adminAuth.POST("/shipments/barcode-parse", middlewares.RequirePermission("shipments.create"), controllers.BarcodeParse)
+
+		// 庫存管理 - 庫存查詢
+		adminAuth.GET("/inventory", middlewares.RequirePermission("inventory-query.view"), controllers.GetInventory)
+
+		// 統計報表作業 - 商品進出簡表
+		adminAuth.GET("/reports/product-in-out-summary/products",
+			middlewares.RequirePermission("product-in-out-summary.view"),
+			controllers.GetProductInOutSummaryProducts)
+		adminAuth.GET("/reports/product-in-out-summary/detail",
+			middlewares.RequirePermission("product-in-out-summary.view"),
+			controllers.GetProductInOutSummaryDetail)
+
+		// 統計報表作業 - 商品銷售總表
+		adminAuth.GET("/reports/product-sales-summary",
+			middlewares.RequirePermission("product-sales-summary.view"),
+			controllers.GetProductSalesSummary)
+
+		// 庫存管理 - 庫存調整
+		adminAuth.GET("/modifies", middlewares.RequirePermission("modify.view"), controllers.GetModifies)
+		adminAuth.GET("/modifies/:id", middlewares.RequirePermission("modify.view"), controllers.GetModify)
+		adminAuth.POST("/modifies", middlewares.RequirePermission("modify.create"), controllers.CreateModify)
+
+		// 庫存管理 - 店櫃調撥
+		adminAuth.GET("/transfers", middlewares.RequirePermission("transfer.view"), controllers.GetTransfers)
+		adminAuth.GET("/transfers/:id", middlewares.RequirePermission("transfer.view"), controllers.GetTransfer)
+		adminAuth.POST("/transfers", middlewares.RequirePermission("transfer.create"), controllers.CreateTransfer)
+		adminAuth.PUT("/transfers/:id", middlewares.RequirePermission("transfer.edit"), controllers.UpdateTransfer)
+		adminAuth.DELETE("/transfers/:id", middlewares.RequirePermission("transfer.delete"), controllers.DeleteTransfer)
+		adminAuth.PUT("/transfers/:id/confirm", middlewares.RequirePermission("transfer.edit"), controllers.ConfirmTransfer)
+
+		// 零售銷售
+		adminAuth.GET("/retail-sells", middlewares.RequirePermission("retail-sells.view"), controllers.GetRetailSells)
+		adminAuth.GET("/retail-sells/:id", middlewares.RequirePermission("retail-sells.view"), controllers.GetRetailSell)
+		adminAuth.POST("/retail-sells", middlewares.RequirePermission("retail-sells.create"), controllers.CreateRetailSell)
+		adminAuth.PUT("/retail-sells/:id", middlewares.RequirePermission("retail-sells.edit"), controllers.UpdateRetailSell)
+		adminAuth.DELETE("/retail-sells/:id", middlewares.RequirePermission("retail-sells.delete"), controllers.DeleteRetailSell)
+
+		// 成本轉換公式
+		adminAuth.GET("/cost-formulas", controllers.GetCostFormulas)
+		adminAuth.POST("/cost-formulas/seed", controllers.SeedCostFormulas)
+
+		// 帳款管理 - 應收帳款查詢
+		adminAuth.GET("/receivables", middlewares.RequirePermission("receivable-query.view"), controllers.GetReceivables)
+
+		// 帳款管理 - 應收帳齡分析表
+		adminAuth.GET("/receivables/aging", middlewares.RequirePermission("receivable-aging.view"), controllers.GetReceivableAging)
+
+		// 帳款管理 - 應收沖銷作業
+		adminAuth.GET("/gathers", middlewares.RequirePermission("gather.view"), controllers.GetGathers)
+		adminAuth.GET("/gathers/uncleared/:customer_id", middlewares.RequirePermission("gather.view"), controllers.GetUnclearedShipments)
+		adminAuth.GET("/gathers/prepaid-credit/:customer_id", middlewares.RequirePermission("gather.view"), controllers.GetPrepaidCredit)
+		adminAuth.GET("/gathers/:id", middlewares.RequirePermission("gather.view"), controllers.GetGather)
+		adminAuth.POST("/gathers", middlewares.RequirePermission("gather.create"), controllers.CreateGather)
+		adminAuth.PUT("/gathers/:id", middlewares.RequirePermission("gather.edit"), controllers.UpdateGather)
+		adminAuth.DELETE("/gathers/:id", middlewares.RequirePermission("gather.delete"), controllers.DeleteGather)
 
 		// 圖片上傳
 		adminAuth.POST("/upload/product-image", middlewares.RequirePermission("product-mgmt.create"), controllers.UploadProductImage)

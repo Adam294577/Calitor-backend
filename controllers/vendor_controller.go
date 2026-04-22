@@ -30,6 +30,30 @@ func GetVendors(c *gin.Context) {
 	resp.Success("成功").SetData(items).SetTotal(total).Send()
 }
 
+// GetVendorOptions 廠商下拉選項（輕量版，僅 id/code/name/short_name）
+func GetVendorOptions(c *gin.Context) {
+	if tryListCache(c) {
+		return
+	}
+	resp := response.New(c)
+	db := models.PostgresNew()
+	defer db.Close()
+
+	type option struct {
+		ID        int64  `json:"id"`
+		Code      string `json:"code"`
+		Name      string `json:"name"`
+		ShortName string `json:"short_name"`
+	}
+	var items []option
+	db.GetRead().Model(&models.Vendor{}).
+		Select("id, code, name, short_name").
+		Order("id ASC").
+		Find(&items)
+	setListCache(c, items, 0)
+	resp.Success("成功").SetData(items).Send()
+}
+
 func CreateVendor(c *gin.Context) {
 	resp := response.New(c)
 	db := models.PostgresNew()

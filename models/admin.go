@@ -18,7 +18,13 @@ type Admin struct {
 	Account    string    `gorm:"type:varchar(255);uniqueIndex;not null" json:"account"`
 	Name       string    `gorm:"type:varchar(255);not null" json:"name"`
 	Password   string    `gorm:"type:varchar(255);not null" json:"-"`
-	RoleId     int64     `gorm:"not null" json:"role_id"`
+}
+
+// AdminRole 帳號角色關聯（1 對多）
+type AdminRole struct {
+	ID      int64 `gorm:"primaryKey" json:"id"`
+	AdminId int64 `gorm:"not null;uniqueIndex:idx_admin_role" json:"admin_id"`
+	RoleId  int64 `gorm:"not null;uniqueIndex:idx_admin_role" json:"role_id"`
 }
 
 // SeedDefaultAdmin 初始化預設管理員帳號
@@ -45,12 +51,14 @@ func SeedDefaultAdmin(db *DBManager) {
 		Account:  "admin",
 		Name:     "管理員",
 		Password: hashedPassword,
-		RoleId:   1,
 		IsSuper:  true,
 	}
 	if err := db.GetWrite().Create(&admin).Error; err != nil {
 		log.Error("建立預設管理員失敗: %s", err.Error())
 		return
 	}
+	// 綁定 admin 角色（ID=1）
+	ar := AdminRole{AdminId: admin.ID, RoleId: 1}
+	db.GetWrite().Where("admin_id = ? AND role_id = ?", ar.AdminId, ar.RoleId).FirstOrCreate(&ar)
 	log.Info("已建立預設管理員帳號: admin")
 }

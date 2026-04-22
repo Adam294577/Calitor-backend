@@ -76,9 +76,9 @@ type Currency struct {
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `gorm:"index" json:"deleted_at"`
-	Code      string         `gorm:"type:varchar(10);uniqueIndex;not null" json:"code"`
-	Name      string         `gorm:"type:varchar(50);not null" json:"name"`
-	Symbol    string         `gorm:"type:varchar(10)" json:"symbol"`
-	IsActive  bool           `gorm:"default:true" json:"is_active"`
+	Code         string         `gorm:"type:varchar(10);uniqueIndex;not null" json:"code"`
+	Name         string         `gorm:"type:varchar(50);not null" json:"name"`
+	Symbol       string         `gorm:"type:varchar(10)" json:"symbol"`
+	ExchangeRate float64        `gorm:"type:numeric(10,4);default:0" json:"exchange_rate"`
+	IsActive     bool           `gorm:"default:true" json:"is_active"`
 }
-

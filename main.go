@@ -17,6 +17,7 @@ import (
 	"project/services/storage"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -94,30 +95,46 @@ func App(HttpServer *gin.Engine) {
 	db := models.PostgresInit()
 	fmt.Println("✓ PostgreSQL 資料庫連線成功")
 
-	// 自動遷移資料表
-	if err := models.MigrateAll(db); err != nil {
-		fmt.Printf("⚠ 資料表遷移失敗: %s\n", err.Error())
+	// 自動遷移 & Seed（僅在 RUN_MIGRATE=true 時執行，預設跳過）
+	if os.Getenv("RUN_MIGRATE") == "true" {
+		if err := models.MigrateAll(db); err != nil {
+			fmt.Printf("⚠ 資料表遷移失敗: %s\n", err.Error())
+		} else {
+			fmt.Println("✓ 資料表遷移完成")
+		}
+		models.SeedPermissionsAndRoles(db)
+		models.SeedDefaultAdmin(db)
+		models.SeedBanks(db)
 	} else {
-		fmt.Println("✓ 資料表遷移完成")
+		fmt.Println("⏭ 略過資料表遷移與 Seed（設定 RUN_MIGRATE=true 以啟用）")
 	}
-
-	// 初始化預設資料
-	models.SeedPermissionsAndRoles(db)
-	models.SeedDefaultAdmin(db)
 
 	// 一次性遷移：將 role_permissions 中的父節點展開為葉子節點
 	// models.MigrateRolePermissionsToLeaf(db)
 
-	// 初始化全域 Redis 連接
-	redisClient := redis.InitGlobal()
+	// 並行初始化 Redis 與 MinIO（減少啟動等待時間）
+	var redisClient *redis.Client
+	var minioClient *storage.Client
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		redisClient = redis.InitGlobal()
+	}()
+
+	go func() {
+		defer wg.Done()
+		minioClient = storage.NewClient()
+	}()
+
+	wg.Wait()
+
 	if redisClient.IsAvailable() {
 		fmt.Println("✓ Redis 緩存功能已啟用")
 	} else {
 		fmt.Println("⚠ Redis 緩存功能未啟用，將使用優雅降級模式（直接查詢資料庫）")
 	}
-
-	// 初始化並檢查 MinIO 連接
-	minioClient := storage.NewClient()
 	if minioClient.IsAvailable() {
 		fmt.Println("✓ MinIO 檔案儲存功能已啟用")
 	} else {
@@ -127,7 +144,7 @@ func App(HttpServer *gin.Engine) {
 	// 啟動Gin服務
 	HttpServer = gin.Default()
 	// 設定信任的 Proxy（請修改為你的反向代理 IP）
-	if err := HttpServer.SetTrustedProxies(nil); err != nil {
+	if err := HttpServer.SetTrustedProxies([]string{"127.0.0.1", "::1", "172.16.0.0/12", "10.0.0.0/8"}); err != nil {
 		fmt.Println("設定信任Proxy錯誤")
 		return
 	}
@@ -152,21 +169,19 @@ func App(HttpServer *gin.Engine) {
 	}
 	docs.SwaggerInfo.Host = host
 
-	// 添加 swagger 路由（需要在中间件之前注册，确保不被拦截）
-	// 处理 /swagger/ 根路径，重定向到 index.html
-	// HttpServer.GET("/swagger/", func(ctx *gin.Context) {
-	// ctx.Redirect(http.StatusMovedPermanently, "/swagger/index.html")
-	// })
-	// 使用 ginSwagger.WrapHandler 处理所有 Swagger 路径，包括 doc.json
-	HttpServer.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+	// Swagger 僅在 debug 模式下載入
+	if viper.GetString("Server.Mode") == "debug" {
+		HttpServer.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+	}
 
 	// 預建 middleware 實例（只初始化一次，避免每次請求重複建立）
 	corsMiddleware := middlewares.CORS()
 	ipWhiteList := middlewares.IPWhiteList()
 	loggerMiddleware := middlewares.Logger()
 
-	// 使用 middleware（CORS → IP 白名單 → requestID → log → recovery）
+	// 使用 middleware（Security Headers → CORS → IP 白名單 → requestID → log → recovery）
 	HttpServer.Use(
+		middlewares.SecurityHeaders(),
 		func(ctx *gin.Context) {
 			if middlewares.SkipMiddleware(ctx.Request.URL.Path) {
 				ctx.Next()

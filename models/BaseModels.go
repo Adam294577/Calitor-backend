@@ -189,9 +189,11 @@ func AllModels() []interface{} {
 		&Permission{},
 		&RolePermission{},
 		&Admin{},
+		&AdminRole{},
 		// 輔助資料
 		&ProductBrand{},
 		&Brand{},
+		&Bank{},
 		&Location{},
 		&TWPostalArea{},
 		&MemberTier{},
@@ -205,7 +207,6 @@ func AllModels() []interface{} {
 		&SizeGroup{},
 		&SizeOption{},
 		&MaterialOption{},
-		&StockLocation{},
 		// 主檔
 		&RetailCustomer{},
 		&Vendor{},
@@ -214,10 +215,126 @@ func AllModels() []interface{} {
 		&ProductCategoryMap{},
 		&ProductVendor{},
 		&ProductSizeStock{},
+		// 日常作業
+		&Purchase{},
+		&PurchaseItem{},
+		&PurchaseItemSize{},
+		&Stock{},
+		&StockItem{},
+		&StockItemSize{},
+		&CostFormula{},
+		// 客戶訂貨/出貨
+		&Order{},
+		&OrderItem{},
+		&OrderItemSize{},
+		&Shipment{},
+		&ShipmentItem{},
+		&ShipmentItemSize{},
+		// 庫存調整
+		&Modify{},
+		&ModifyItem{},
+		&ModifyItemSize{},
+		// 店櫃調撥
+		&Transfer{},
+		&TransferItem{},
+		&TransferItemSize{},
+		// 零售銷售
+		&RetailSell{},
+		&RetailSellItem{},
+		&RetailSellItemSize{},
+		// 收款對帳
+		&Gather{},
+		&GatherDetail{},
+		&BankBusiness{},
 	}
 }
 
 // MigrateAll 自動遷移所有資料表
 func MigrateAll(db *DBManager) error {
-	return db.GetWrite().AutoMigrate(AllModels()...)
+	if err := db.GetWrite().AutoMigrate(AllModels()...); err != nil {
+		return err
+	}
+
+	// 一次性重算庫存（清空 product_size_stocks 後從 stock/shipment/modify 重建）
+	if err := db.GetWrite().Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec("DELETE FROM product_size_stocks").Error; err != nil {
+			return fmt.Errorf("清空庫存表失敗: %w", err)
+		}
+		// 進貨加庫存
+		if err := tx.Exec(`
+			INSERT INTO product_size_stocks (product_id, customer_id, size_option_id, qty, created_at, updated_at)
+			SELECT si.product_id, s.customer_id, sis.size_option_id,
+				SUM(CASE WHEN s.stock_mode = 1 THEN sis.qty ELSE -sis.qty END),
+				NOW(), NOW()
+			FROM stock_item_sizes sis
+			JOIN stock_items si ON si.id = sis.stock_item_id
+			JOIN stocks s ON s.id = si.stock_id AND s.deleted_at IS NULL
+			GROUP BY si.product_id, s.customer_id, sis.size_option_id
+			ON CONFLICT (product_id, customer_id, size_option_id) DO UPDATE SET qty = product_size_stocks.qty + EXCLUDED.qty
+		`).Error; err != nil {
+			return fmt.Errorf("重建進貨庫存失敗: %w", err)
+		}
+		// 出貨扣庫存
+		if err := tx.Exec(`
+			INSERT INTO product_size_stocks (product_id, customer_id, size_option_id, qty, created_at, updated_at)
+			SELECT si.product_id, rc.id, sis.size_option_id,
+				SUM(CASE WHEN s.shipment_mode = 3 THEN -sis.qty ELSE sis.qty END),
+				NOW(), NOW()
+			FROM shipment_item_sizes sis
+			JOIN shipment_items si ON si.id = sis.shipment_item_id
+			JOIN shipments s ON s.id = si.shipment_id AND s.deleted_at IS NULL
+			JOIN retail_customers rc ON rc.branch_code = s.ship_store AND rc.branch_code != ''
+			GROUP BY si.product_id, rc.id, sis.size_option_id
+			ON CONFLICT (product_id, customer_id, size_option_id) DO UPDATE SET qty = product_size_stocks.qty + EXCLUDED.qty
+		`).Error; err != nil {
+			return fmt.Errorf("重建出貨庫存失敗: %w", err)
+		}
+		// 庫存調整
+		if err := tx.Exec(`
+			INSERT INTO product_size_stocks (product_id, customer_id, size_option_id, qty, created_at, updated_at)
+			SELECT mi.product_id, m.customer_id, mis.size_option_id,
+				SUM(mis.qty),
+				NOW(), NOW()
+			FROM modify_item_sizes mis
+			JOIN modify_items mi ON mi.id = mis.modify_item_id
+			JOIN modifies m ON m.id = mi.modify_id AND m.deleted_at IS NULL
+			GROUP BY mi.product_id, m.customer_id, mis.size_option_id
+			ON CONFLICT (product_id, customer_id, size_option_id) DO UPDATE SET qty = product_size_stocks.qty + EXCLUDED.qty
+		`).Error; err != nil {
+			return fmt.Errorf("重建調整庫存失敗: %w", err)
+		}
+		// 調撥扣庫存（調出方）
+		if err := tx.Exec(`
+			INSERT INTO product_size_stocks (product_id, customer_id, size_option_id, qty, created_at, updated_at)
+			SELECT ti.product_id, t.source_customer_id, tis.size_option_id,
+				SUM(-tis.qty),
+				NOW(), NOW()
+			FROM transfer_item_sizes tis
+			JOIN transfer_items ti ON ti.id = tis.transfer_item_id
+			JOIN transfers t ON t.id = ti.transfer_id AND t.deleted_at IS NULL
+			GROUP BY ti.product_id, t.source_customer_id, tis.size_option_id
+			ON CONFLICT (product_id, customer_id, size_option_id) DO UPDATE SET qty = product_size_stocks.qty + EXCLUDED.qty
+		`).Error; err != nil {
+			return fmt.Errorf("重建調撥扣庫存失敗: %w", err)
+		}
+		// 調撥加庫存（調入方）
+		if err := tx.Exec(`
+			INSERT INTO product_size_stocks (product_id, customer_id, size_option_id, qty, created_at, updated_at)
+			SELECT ti.product_id, ti.dest_customer_id, tis.size_option_id,
+				SUM(tis.qty),
+				NOW(), NOW()
+			FROM transfer_item_sizes tis
+			JOIN transfer_items ti ON ti.id = tis.transfer_item_id
+			JOIN transfers t ON t.id = ti.transfer_id AND t.deleted_at IS NULL
+			GROUP BY ti.product_id, ti.dest_customer_id, tis.size_option_id
+			ON CONFLICT (product_id, customer_id, size_option_id) DO UPDATE SET qty = product_size_stocks.qty + EXCLUDED.qty
+		`).Error; err != nil {
+			return fmt.Errorf("重建調撥加庫存失敗: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("重算庫存失敗: %w", err)
+	}
+
+	return nil
 }

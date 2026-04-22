@@ -13,7 +13,7 @@ import (
 type AdminTokenClaims struct {
 	AdminId     int64
 	Account     string
-	RoleId      int64
+	RoleIds     []int64
 	Permissions []string
 }
 
@@ -28,7 +28,7 @@ func GenerateAdminToken(claimsData AdminTokenClaims) (string, error) {
 	claims := jwt.MapClaims{
 		"AdminId":     claimsData.AdminId,
 		"Account":     claimsData.Account,
-		"RoleId":      claimsData.RoleId,
+		"RoleIds":     claimsData.RoleIds,
 		"Permissions": claimsData.Permissions,
 		"exp":         expirationTime.Unix(),
 		"iat":         time.Now().Unix(),
@@ -87,11 +87,15 @@ func ParseAdminToken(tokenString string) (*AdminTokenClaims, error) {
 		// 提取 Account
 		account, _ := claims["Account"].(string)
 
-		// 提取 RoleId
-		var roleId int64
-		if roleIdVal, exists := claims["RoleId"]; exists && roleIdVal != nil {
-			if roleIdFloat, ok := roleIdVal.(float64); ok {
-				roleId = int64(roleIdFloat)
+		// 提取 RoleIds
+		var roleIds []int64
+		if roleIdsVal, exists := claims["RoleIds"]; exists && roleIdsVal != nil {
+			if roleIdsArr, ok := roleIdsVal.([]interface{}); ok {
+				for _, v := range roleIdsArr {
+					if f, ok := v.(float64); ok {
+						roleIds = append(roleIds, int64(f))
+					}
+				}
 			}
 		}
 
@@ -110,7 +114,7 @@ func ParseAdminToken(tokenString string) (*AdminTokenClaims, error) {
 		return &AdminTokenClaims{
 			AdminId:     adminId,
 			Account:     account,
-			RoleId:      roleId,
+			RoleIds:     roleIds,
 			Permissions: permissions,
 		}, nil
 	}

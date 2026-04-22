@@ -49,6 +49,24 @@ func setListCache(c *gin.Context, data interface{}, total int64) {
 	rc.SetJSON(listCacheKey(c), cachedResponse{Data: data, Total: total}, listCacheTTL)
 }
 
+// getListCache 嘗試從 Redis 讀取快取到 dst，命中回 true（不自動回應，讓呼叫端補即時資料後再回）
+func getListCache(c *gin.Context, dst interface{}) bool {
+	rc := redis.Global()
+	if !rc.IsAvailable() {
+		return false
+	}
+	return rc.GetJSON(listCacheKey(c), dst) == nil
+}
+
+// setListCacheRaw 把任意資料直接寫入快取（不包 cachedResponse 外殼），給需自行組回應的場景用
+func setListCacheRaw(c *gin.Context, data interface{}) {
+	rc := redis.Global()
+	if !rc.IsAvailable() {
+		return
+	}
+	rc.SetJSON(listCacheKey(c), data, listCacheTTL)
+}
+
 // invalidateListCache 清除指定路徑前綴的所有快取
 func invalidateListCache(pathPrefixes ...string) {
 	rc := redis.Global()

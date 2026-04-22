@@ -11,6 +11,9 @@ import (
 )
 
 func GetCustomers(c *gin.Context) {
+	if tryListCache(c) {
+		return
+	}
 	resp := response.New(c)
 	db := models.PostgresNew()
 	defer db.Close()
@@ -23,7 +26,38 @@ func GetCustomers(c *gin.Context) {
 	}
 	paged, total := Paginate(c, query, &models.RetailCustomer{})
 	paged.Find(&items)
+	setListCache(c, items, total)
 	resp.Success("成功").SetData(items).SetTotal(total).Send()
+}
+
+// GetCustomerOptions 客戶下拉選項（含列印所需欄位）
+func GetCustomerOptions(c *gin.Context) {
+	if tryListCache(c) {
+		return
+	}
+	resp := response.New(c)
+	db := models.PostgresNew()
+	defer db.Close()
+
+	type option struct {
+		ID              int64  `json:"id"`
+		Code            string `json:"code"`
+		Name            string `json:"name"`
+		ShortName       string `json:"short_name"`
+		BranchCode      string `json:"branch_code"`
+		ClosingDate     int    `json:"closing_date"`
+		Phone1          string `json:"phone1"`
+		ShippingAddress string `json:"shipping_address"`
+		SalesmanID      *int64 `json:"salesman_id"`
+	}
+	var items []option
+	db.GetRead().Model(&models.RetailCustomer{}).
+		Select("id, code, name, short_name, branch_code, closing_date, phone1, shipping_address, salesman_id").
+		Where("is_visible = ?", true).
+		Order("id ASC").
+		Find(&items)
+	setListCache(c, items, 0)
+	resp.Success("成功").SetData(items).Send()
 }
 
 func CreateCustomer(c *gin.Context) {
@@ -37,8 +71,8 @@ func CreateCustomer(c *gin.Context) {
 		return
 	}
 
-	if item.Code == "" || item.Name == "" {
-		resp.Fail(http.StatusBadRequest, "客戶代號和名稱為必填").Send()
+	if item.Code == "" || item.Name == "" || item.BranchCode == "" {
+		resp.Fail(http.StatusBadRequest, "客戶代號、名稱和貨點代碼為必填").Send()
 		return
 	}
 
@@ -55,6 +89,7 @@ func CreateCustomer(c *gin.Context) {
 		resp.Panic(err).Send()
 		return
 	}
+	invalidateListCache("customers")
 	resp.Success("新增成功").SetData(item).Send()
 }
 
@@ -82,6 +117,7 @@ func UpdateCustomer(c *gin.Context) {
 		Name               *string  `json:"name"`
 		ShortName          *string  `json:"short_name"`
 		Category           *string  `json:"category"`
+		SalesmanID         *int64   `json:"salesman_id"`
 		Month              *string  `json:"month"`
 		ClosingDate        *int     `json:"closing_date"`
 		TaxId              *string  `json:"tax_id"`
@@ -121,6 +157,7 @@ func UpdateCustomer(c *gin.Context) {
 	}
 
 	db.GetWrite().Model(&existing).Updates(req)
+	invalidateListCache("customers")
 	resp.Success("更新成功").Send()
 }
 
@@ -136,5 +173,6 @@ func DeleteCustomer(c *gin.Context) {
 	defer db.Close()
 
 	db.GetWrite().Delete(&models.RetailCustomer{}, id)
+	invalidateListCache("customers")
 	resp.Success("刪除成功").Send()
 }

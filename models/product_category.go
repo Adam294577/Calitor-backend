@@ -70,16 +70,16 @@ func (ProductCategory5) TableName() string { return "product_category_5" }
 type ProductCategoryMap struct {
 	ID           int64             `gorm:"primaryKey" json:"id"`
 	ProductID    int64             `gorm:"not null;uniqueIndex:idx_product_category_type" json:"product_id"`
-	CategoryType int              `gorm:"not null;uniqueIndex:idx_product_category_type" json:"category_type"` // 1~5
-	Category1ID  *int64           `gorm:"index" json:"category1_id"`
+	CategoryType int               `gorm:"not null;uniqueIndex:idx_product_category_type" json:"category_type"` // 1~5
+	Category1ID  *int64            `gorm:"index" json:"category1_id"`
 	Category1    *ProductCategory1 `gorm:"foreignKey:Category1ID" json:"category1,omitempty"`
-	Category2ID  *int64           `gorm:"index" json:"category2_id"`
+	Category2ID  *int64            `gorm:"index" json:"category2_id"`
 	Category2    *ProductCategory2 `gorm:"foreignKey:Category2ID" json:"category2,omitempty"`
-	Category3ID  *int64           `gorm:"index" json:"category3_id"`
+	Category3ID  *int64            `gorm:"index" json:"category3_id"`
 	Category3    *ProductCategory3 `gorm:"foreignKey:Category3ID" json:"category3,omitempty"`
-	Category4ID  *int64           `gorm:"index" json:"category4_id"`
+	Category4ID  *int64            `gorm:"index" json:"category4_id"`
 	Category4    *ProductCategory4 `gorm:"foreignKey:Category4ID" json:"category4,omitempty"`
-	Category5ID  *int64           `gorm:"index" json:"category5_id"`
+	Category5ID  *int64            `gorm:"index" json:"category5_id"`
 	Category5    *ProductCategory5 `gorm:"foreignKey:Category5ID" json:"category5,omitempty"`
 }
 

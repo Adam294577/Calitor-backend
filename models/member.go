@@ -30,7 +30,7 @@ type Member struct {
 	ExpiryDate       string         `gorm:"type:varchar(20)" json:"expiry_date"`
 	TotalSpending    float64        `gorm:"type:decimal(12,2)" json:"total_spending"`
 	Points           float64        `gorm:"type:decimal(12,2)" json:"points"`
-	SpendingDiscount int            `gorm:"default:100" json:"spending_discount"`
+	SpendingDiscount float64        `gorm:"type:numeric(5,2);default:100" json:"spending_discount"`
 	Email            string         `gorm:"type:varchar(200)" json:"email"`
 	Note             string         `gorm:"type:text" json:"note"`
 	PrintFlag        int            `gorm:"default:1" json:"print_flag"`
