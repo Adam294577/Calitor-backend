@@ -14,6 +14,7 @@ import (
 // outstandingRow 未交統計列
 type outstandingRow struct {
 	GroupLabel    string         `json:"group_label"`
+	ProductName   string         `json:"product_name,omitempty"`
 	SubLabel      string         `json:"sub_label,omitempty"`
 	SizeGroupCode string         `json:"size_group_code"`
 	Sizes         map[string]int `json:"sizes"`
@@ -126,6 +127,7 @@ func GetPurchaseOutstanding(c *gin.Context) {
 		purchaseNo    string
 		vendorName    string
 		modelCode     string
+		productName   string
 		sizeGroupCode string
 		purchasePrice float64
 		sizes         map[string]int
@@ -144,8 +146,10 @@ func GetPurchaseOutstanding(c *gin.Context) {
 
 		for _, item := range p.Items {
 			modelCode := ""
+			productName := ""
 			if item.Product != nil {
 				modelCode = item.Product.ModelCode
+				productName = item.Product.NameSpec
 			}
 			sizeGroupCode := ""
 			if item.SizeGroup != nil {
@@ -179,6 +183,7 @@ func GetPurchaseOutstanding(c *gin.Context) {
 				purchaseNo:    p.PurchaseNo,
 				vendorName:    vendorName,
 				modelCode:     modelCode,
+				productName:   productName,
 				sizeGroupCode: sizeGroupCode,
 				purchasePrice: item.PurchasePrice,
 				sizes:         sizes,
@@ -215,6 +220,7 @@ func GetPurchaseOutstanding(c *gin.Context) {
 			subLabel := fmt.Sprintf("#%s(%s)", d.vendorName, d.purchaseNo)
 			rows = append(rows, outstandingRow{
 				GroupLabel:    d.modelCode,
+				ProductName:   d.productName,
 				SubLabel:      subLabel,
 				SizeGroupCode: d.sizeGroupCode,
 				Sizes:         d.sizes,
@@ -225,6 +231,7 @@ func GetPurchaseOutstanding(c *gin.Context) {
 	} else {
 		type aggEntry struct {
 			groupLabel    string
+			productName   string
 			sizeGroupCode string
 			sizes         map[string]int
 			totalQty      int
@@ -234,18 +241,21 @@ func GetPurchaseOutstanding(c *gin.Context) {
 		var aggOrder []string
 
 		for _, d := range details {
-			var groupKey string
+			var groupKey, productName string
 			switch groupBy {
 			case "vendor":
 				groupKey = d.vendorName
+				productName = ""
 			default:
 				groupKey = d.modelCode
+				productName = d.productName
 			}
 
 			agg, exists := aggMap[groupKey]
 			if !exists {
 				agg = &aggEntry{
 					groupLabel:    groupKey,
+					productName:   productName,
 					sizeGroupCode: d.sizeGroupCode,
 					sizes:         map[string]int{},
 				}
@@ -264,6 +274,7 @@ func GetPurchaseOutstanding(c *gin.Context) {
 			agg := aggMap[key]
 			rows = append(rows, outstandingRow{
 				GroupLabel:    agg.groupLabel,
+				ProductName:   agg.productName,
 				SizeGroupCode: agg.sizeGroupCode,
 				Sizes:         agg.sizes,
 				TotalQty:      agg.totalQty,

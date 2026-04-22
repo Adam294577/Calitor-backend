@@ -11,6 +11,9 @@ import (
 )
 
 func GetCustomers(c *gin.Context) {
+	if tryListCache(c) {
+		return
+	}
 	resp := response.New(c)
 	db := models.PostgresNew()
 	defer db.Close()
@@ -23,11 +26,15 @@ func GetCustomers(c *gin.Context) {
 	}
 	paged, total := Paginate(c, query, &models.RetailCustomer{})
 	paged.Find(&items)
+	setListCache(c, items, total)
 	resp.Success("成功").SetData(items).SetTotal(total).Send()
 }
 
 // GetCustomerOptions 客戶下拉選項（含列印所需欄位）
 func GetCustomerOptions(c *gin.Context) {
+	if tryListCache(c) {
+		return
+	}
 	resp := response.New(c)
 	db := models.PostgresNew()
 	defer db.Close()
@@ -49,6 +56,7 @@ func GetCustomerOptions(c *gin.Context) {
 		Where("is_visible = ?", true).
 		Order("id ASC").
 		Find(&items)
+	setListCache(c, items, 0)
 	resp.Success("成功").SetData(items).Send()
 }
 
@@ -81,6 +89,7 @@ func CreateCustomer(c *gin.Context) {
 		resp.Panic(err).Send()
 		return
 	}
+	invalidateListCache("customers")
 	resp.Success("新增成功").SetData(item).Send()
 }
 
@@ -148,6 +157,7 @@ func UpdateCustomer(c *gin.Context) {
 	}
 
 	db.GetWrite().Model(&existing).Updates(req)
+	invalidateListCache("customers")
 	resp.Success("更新成功").Send()
 }
 
@@ -163,5 +173,6 @@ func DeleteCustomer(c *gin.Context) {
 	defer db.Close()
 
 	db.GetWrite().Delete(&models.RetailCustomer{}, id)
+	invalidateListCache("customers")
 	resp.Success("刪除成功").Send()
 }

@@ -13,6 +13,9 @@ import (
 )
 
 func GetProducts(c *gin.Context) {
+	if tryListCache(c) {
+		return
+	}
 	resp := response.New(c)
 	db := models.PostgresNew()
 	defer db.Close()
@@ -31,6 +34,7 @@ func GetProducts(c *gin.Context) {
 		Preload("ProductBrand").
 		Preload("ProductVendors.Vendor").
 		Find(&items)
+	setListCache(c, items, total)
 	resp.Success("成功").SetData(items).SetTotal(total).Send()
 }
 
@@ -201,6 +205,7 @@ func CreateProduct(c *gin.Context) {
 		return
 	}
 
+	invalidateListCache("products")
 	resp.Success("新增成功").SetData(product).Send()
 }
 
@@ -346,6 +351,7 @@ func UpdateProduct(c *gin.Context) {
 		return
 	}
 
+	invalidateListCache("products")
 	resp.Success("更新成功").Send()
 }
 
@@ -370,5 +376,6 @@ func DeleteProduct(c *gin.Context) {
 		return
 	}
 
+	invalidateListCache("products")
 	resp.Success("刪除成功").Send()
 }

@@ -384,6 +384,7 @@ func DeletePurchase(c *gin.Context) {
 }
 
 // SearchProducts 搜尋特定廠商的商品（供採購單選擇商品用）
+// 快取策略（方案 A）：商品主檔（不含 SizeStocks）走 Redis，庫存與訂貨明細每次即時查 DB
 func SearchProducts(c *gin.Context) {
 	resp := response.New(c)
 	db := models.PostgresNew()
@@ -395,56 +396,75 @@ func SearchProducts(c *gin.Context) {
 	customerID := c.Query("customer_id")
 	storeCode := c.Query("store_code")
 
-	query := db.GetRead().Order("id ASC")
-	if vendorID != "" {
-		query = query.Where("id IN (SELECT product_id FROM product_vendors WHERE vendor_id = ?)", vendorID)
-	}
-	if brandID != "" {
-		query = query.Where("brand_id = ?", brandID)
-	}
-	if customerID != "" && vendorID == "" && brandID == "" {
-		// 出貨用：依客戶的訂貨明細找商品
-		query = query.Where("id IN (SELECT DISTINCT oi.product_id FROM order_items oi JOIN orders o ON o.id = oi.order_id AND o.deleted_at IS NULL WHERE o.customer_id = ?)", customerID)
-	}
-	if search != "" {
-		like := "%" + search + "%"
-		query = query.Where("model_code ILIKE ? OR name_spec ILIKE ?", like, like)
-	}
-
+	// --- 商品主檔：先查 Redis，miss 再打 DB ---
 	var items []models.Product
-	query.
-		Preload("Size1Group.Options", func(db *gorm.DB) *gorm.DB {
-			return db.Order("sort_order ASC")
-		}).
-		Preload("Size2Group.Options", func(db *gorm.DB) *gorm.DB {
-			return db.Order("sort_order ASC")
-		}).
-		Preload("Size3Group.Options", func(db *gorm.DB) *gorm.DB {
-			return db.Order("sort_order ASC")
-		}).
-		Preload("CategoryMaps", func(db *gorm.DB) *gorm.DB {
-			return db.Where("category_type = 5")
-		}).
-		Preload("CategoryMaps.Category5").
-		Preload("ProductVendors", func(db *gorm.DB) *gorm.DB {
-			if vendorID != "" {
-				return db.Where("vendor_id = ?", vendorID)
-			}
-			return db
-		}).
-		Preload("SizeStocks", func(db *gorm.DB) *gorm.DB {
-			if storeCode != "" {
-				return db.Where("customer_id IN (SELECT id FROM retail_customers WHERE branch_code = ?)", storeCode)
-			}
-			if customerID != "" {
-				return db.Where("customer_id = ?", customerID)
-			}
-			return db
-		}).
-		Limit(20).
-		Find(&items)
+	if !getListCache(c, &items) {
+		query := db.GetRead().Order("id ASC")
+		if vendorID != "" {
+			query = query.Where("id IN (SELECT product_id FROM product_vendors WHERE vendor_id = ?)", vendorID)
+		}
+		if brandID != "" {
+			query = query.Where("brand_id = ?", brandID)
+		}
+		if customerID != "" && vendorID == "" && brandID == "" {
+			// 出貨用：依客戶的訂貨明細找商品
+			query = query.Where("id IN (SELECT DISTINCT oi.product_id FROM order_items oi JOIN orders o ON o.id = oi.order_id AND o.deleted_at IS NULL WHERE o.customer_id = ?)", customerID)
+		}
+		if search != "" {
+			like := "%" + search + "%"
+			query = query.Where("model_code ILIKE ? OR name_spec ILIKE ?", like, like)
+		}
 
-	// 出貨用：回傳該客戶的訂貨明細（最近一筆未完成的訂貨），方便帶入售價/數量
+		query.
+			Preload("Size1Group.Options", func(db *gorm.DB) *gorm.DB {
+				return db.Order("sort_order ASC")
+			}).
+			Preload("Size2Group.Options", func(db *gorm.DB) *gorm.DB {
+				return db.Order("sort_order ASC")
+			}).
+			Preload("Size3Group.Options", func(db *gorm.DB) *gorm.DB {
+				return db.Order("sort_order ASC")
+			}).
+			Preload("CategoryMaps", func(db *gorm.DB) *gorm.DB {
+				return db.Where("category_type = 5")
+			}).
+			Preload("CategoryMaps.Category5").
+			Preload("ProductVendors", func(db *gorm.DB) *gorm.DB {
+				if vendorID != "" {
+					return db.Where("vendor_id = ?", vendorID)
+				}
+				return db
+			}).
+			Limit(20).
+			Find(&items)
+
+		setListCacheRaw(c, items)
+	}
+
+	// --- 即時查庫存（不快取）並掛回每個 product 的 SizeStocks ---
+	if (storeCode != "" || customerID != "") && len(items) > 0 {
+		productIDs := make([]int64, 0, len(items))
+		for _, p := range items {
+			productIDs = append(productIDs, p.ID)
+		}
+		var stocks []models.ProductSizeStock
+		stockQ := db.GetRead().Where("product_id IN ?", productIDs)
+		if storeCode != "" {
+			stockQ = stockQ.Where("customer_id IN (SELECT id FROM retail_customers WHERE branch_code = ?)", storeCode)
+		} else if customerID != "" {
+			stockQ = stockQ.Where("customer_id = ?", customerID)
+		}
+		stockQ.Find(&stocks)
+		stockMap := map[int64][]models.ProductSizeStock{}
+		for _, s := range stocks {
+			stockMap[s.ProductID] = append(stockMap[s.ProductID], s)
+		}
+		for i := range items {
+			items[i].SizeStocks = stockMap[items[i].ID]
+		}
+	}
+
+	// --- 即時查訂貨明細（不快取）：出貨用，帶入售價/數量 ---
 	if customerID != "" {
 		var productIDs []int64
 		for _, p := range items {

@@ -32,6 +32,9 @@ func GetVendors(c *gin.Context) {
 
 // GetVendorOptions 廠商下拉選項（輕量版，僅 id/code/name/short_name）
 func GetVendorOptions(c *gin.Context) {
+	if tryListCache(c) {
+		return
+	}
 	resp := response.New(c)
 	db := models.PostgresNew()
 	defer db.Close()
@@ -47,6 +50,7 @@ func GetVendorOptions(c *gin.Context) {
 		Select("id, code, name, short_name").
 		Order("id ASC").
 		Find(&items)
+	setListCache(c, items, 0)
 	resp.Success("成功").SetData(items).Send()
 }
 
