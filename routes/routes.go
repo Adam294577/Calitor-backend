@@ -185,6 +185,8 @@ func RouterRegister(route *gin.Engine) {
 
 		// 日常作業 - 廠商進貨
 		adminAuth.GET("/stocks", middlewares.RequirePermission("stocks.view"), controllers.GetStocks)
+		// 廠商進貨統計（需在 :id 路由之前註冊）
+		adminAuth.GET("/stocks/summary", middlewares.RequirePermission("vendor-stock-summary.view"), controllers.GetStockSummary)
 		adminAuth.GET("/stocks/:id", middlewares.RequirePermission("stocks.view"), controllers.GetStock)
 		adminAuth.POST("/stocks", middlewares.RequirePermission("stocks.create"), controllers.CreateStock)
 		adminAuth.PUT("/stocks/:id", middlewares.RequirePermission("stocks.edit"), controllers.UpdateStock)
@@ -206,6 +208,8 @@ func RouterRegister(route *gin.Engine) {
 
 		// 日常作業 - 客戶出貨
 		adminAuth.GET("/shipments", middlewares.RequirePermission("shipments.view"), controllers.GetShipments)
+		// 客戶出貨統計（需在 :id 路由之前註冊）
+		adminAuth.GET("/shipments/summary", middlewares.RequirePermission("customer-shipment-summary.view"), controllers.GetShipmentSummary)
 		adminAuth.GET("/shipments/:id", middlewares.RequirePermission("shipments.view"), controllers.GetShipment)
 		adminAuth.POST("/shipments", middlewares.RequirePermission("shipments.create"), controllers.CreateShipment)
 		adminAuth.PUT("/shipments/:id", middlewares.RequirePermission("shipments.edit"), controllers.UpdateShipment)
@@ -223,6 +227,11 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.GET("/reports/product-in-out-summary/detail",
 			middlewares.RequirePermission("product-in-out-summary.view"),
 			controllers.GetProductInOutSummaryDetail)
+
+		// 統計報表作業 - 商品銷售總表
+		adminAuth.GET("/reports/product-sales-summary",
+			middlewares.RequirePermission("product-sales-summary.view"),
+			controllers.GetProductSalesSummary)
 
 		// 庫存管理 - 庫存調整
 		adminAuth.GET("/modifies", middlewares.RequirePermission("modify.view"), controllers.GetModifies)
