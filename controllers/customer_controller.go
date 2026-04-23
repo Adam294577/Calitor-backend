@@ -49,10 +49,11 @@ func GetCustomerOptions(c *gin.Context) {
 		Phone1          string `json:"phone1"`
 		ShippingAddress string `json:"shipping_address"`
 		SalesmanID      *int64 `json:"salesman_id"`
+		Discount        int    `json:"discount"`
 	}
 	var items []option
 	db.GetRead().Model(&models.RetailCustomer{}).
-		Select("id, code, name, short_name, branch_code, closing_date, phone1, shipping_address, salesman_id").
+		Select("id, code, name, short_name, branch_code, closing_date, phone1, shipping_address, salesman_id, discount").
 		Where("is_visible = ?", true).
 		Order("id ASC").
 		Find(&items)
