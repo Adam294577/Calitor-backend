@@ -3,8 +3,8 @@ package controllers
 import (
 	"fmt"
 	"net/http"
-	"project/middlewares"
 	"project/models"
+	"project/services/permission"
 	response "project/services/responses"
 	"strconv"
 	"time"
@@ -136,9 +136,7 @@ func UpdateVendor(c *gin.Context) {
 	}
 
 	// 無「編輯主檔代碼」權限者，忽略 code 欄位變更
-	if req.Code != nil && !middlewares.HasPermission(c, "edit-master-code") {
-		req.Code = nil
-	}
+	permission.StripMasterCodeFields(c, &req, "code")
 
 	if req.Code != nil && *req.Code != "" && *req.Code != existing.Code {
 		var count int64

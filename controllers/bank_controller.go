@@ -2,8 +2,8 @@ package controllers
 
 import (
 	"net/http"
-	"project/middlewares"
 	"project/models"
+	"project/services/permission"
 	response "project/services/responses"
 	"strconv"
 
@@ -93,9 +93,7 @@ func UpdateBank(c *gin.Context) {
 	}
 
 	// 無「編輯主檔代碼」權限者，忽略 account_no 欄位變更
-	if !middlewares.HasPermission(c, "edit-master-code") {
-		req.AccountNo = ""
-	}
+	permission.StripMasterCodeFields(c, &req, "account_no")
 
 	db := models.PostgresNew()
 	defer db.Close()

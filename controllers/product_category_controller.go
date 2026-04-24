@@ -3,8 +3,8 @@ package controllers
 import (
 	"fmt"
 	"net/http"
-	"project/middlewares"
 	"project/models"
+	"project/services/permission"
 	response "project/services/responses"
 	"strconv"
 
@@ -145,9 +145,7 @@ func UpdateProductCategoryByLevel(c *gin.Context) {
 	}
 
 	// 無「編輯主檔代碼」權限者，忽略 code 欄位變更
-	if !middlewares.HasPermission(c, "edit-master-code") {
-		req.Code = ""
-	}
+	permission.StripMasterCodeFields(c, &req, "code")
 
 	db := models.PostgresNew()
 	defer db.Close()

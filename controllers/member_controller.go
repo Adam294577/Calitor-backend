@@ -2,8 +2,8 @@ package controllers
 
 import (
 	"net/http"
-	"project/middlewares"
 	"project/models"
+	"project/services/permission"
 	response "project/services/responses"
 	"strconv"
 	"time"
@@ -109,9 +109,7 @@ func UpdateMember(c *gin.Context) {
 	}
 
 	// 無「編輯主檔代碼」權限者，忽略 code 欄位變更
-	if !middlewares.HasPermission(c, "edit-master-code") {
-		delete(rawReq, "code")
-	}
+	permission.StripMasterCodeFields(c, rawReq, "code")
 
 	// 檢查 code 唯一性
 	if code, ok := rawReq["code"].(string); ok && code != "" && code != existing.Code {
