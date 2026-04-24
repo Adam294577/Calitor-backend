@@ -92,13 +92,13 @@ func Login(c *gin.Context) {
 	resp.Success("登入成功").SetData(gin.H{
 		"token": token,
 		"admin": gin.H{
-			"id":         admin.ID,
-			"account":    admin.Account,
-			"name":       admin.Name,
-			"role_ids":   roleIds,
-			"is_super":   admin.IsSuper,
+			"id":          admin.ID,
+			"account":     admin.Account,
+			"name":        admin.Name,
+			"role_ids":    roleIds,
+			"is_super":    admin.IsSuper,
 			"is_disabled": admin.IsDisabled,
-			"role_names": roleNames,
+			"role_names":  roleNames,
 		},
 	}).Send()
 }
@@ -441,6 +441,12 @@ func ResetAccountPassword(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		resp.Fail(http.StatusBadRequest, "無效的 ID").Send()
+		return
+	}
+
+	// 自己重設自己永遠允許；改別人需要 accounts.reset_password 權限
+	if id != getAdminId(c) && !middlewares.HasPermission(c, "accounts.reset_password") {
+		resp.Fail(http.StatusForbidden, "無權限重設他人密碼").Send()
 		return
 	}
 

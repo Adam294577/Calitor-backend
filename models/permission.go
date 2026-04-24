@@ -151,7 +151,8 @@ func SeedPermissionsAndRoles(db *DBManager) {
 		{Key: "accounts.view", Name: "檢視帳號", Sort: 1, ParentId: &accountsId},
 		{Key: "accounts.create", Name: "新增帳號", Sort: 2, ParentId: &accountsId},
 		{Key: "accounts.edit", Name: "編輯帳號", Sort: 3, ParentId: &accountsId},
-		{Key: "accounts.disable", Name: "停權帳號", Sort: 4, ParentId: &accountsId},
+		{Key: "accounts.reset_password", Name: "重設他人密碼", Sort: 4, ParentId: &accountsId},
+		{Key: "accounts.disable", Name: "停權帳號", Sort: 5, ParentId: &accountsId},
 		{Key: "roles.view", Name: "檢視角色", Sort: 1, ParentId: &rolesId},
 		{Key: "roles.edit", Name: "編輯角色", Sort: 2, ParentId: &rolesId},
 		{Key: "permissions.view", Name: "檢視權限", Sort: 1, ParentId: &permissionsId},
@@ -227,9 +228,19 @@ func SeedMasterDataPermissions(db *DBManager) {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&p)
 	}
 
+	// === 頂層：編輯主檔代碼 ===（獨立節點，跨主檔/輔助資料；控制 code 欄位是否可被修改）
+	editMasterCode := Permission{Key: "edit-master-code", Name: "編輯主檔代碼", Sort: 4}
+	db.GetWrite().Where("key = ?", editMasterCode.Key).FirstOrCreate(&editMasterCode)
+	db.GetWrite().Model(&Permission{}).Where("key = ?", editMasterCode.Key).Updates(map[string]interface{}{
+		"name": editMasterCode.Name, "sort": editMasterCode.Sort,
+	})
+
 	// === 頂層：輔助資料增修 ===
-	auxiliaryData := Permission{Key: "auxiliary-data", Name: "輔助資料增修", Sort: 4}
+	auxiliaryData := Permission{Key: "auxiliary-data", Name: "輔助資料增修", Sort: 5}
 	db.GetWrite().Where("key = ?", auxiliaryData.Key).FirstOrCreate(&auxiliaryData)
+	db.GetWrite().Model(&Permission{}).Where("key = ?", auxiliaryData.Key).Updates(map[string]interface{}{
+		"name": auxiliaryData.Name, "sort": auxiliaryData.Sort,
+	})
 
 	// 輔助資料 - 第二層
 	auxMid := []Permission{
@@ -308,8 +319,11 @@ func SeedMasterDataPermissions(db *DBManager) {
 	}
 
 	// === 頂層：日常作業交易 ===
-	dailyOps := Permission{Key: "daily-operations", Name: "日常作業交易", Sort: 5}
+	dailyOps := Permission{Key: "daily-operations", Name: "日常作業交易", Sort: 6}
 	db.GetWrite().Where("key = ?", dailyOps.Key).FirstOrCreate(&dailyOps)
+	db.GetWrite().Model(&Permission{}).Where("key = ?", dailyOps.Key).Updates(map[string]interface{}{
+		"name": dailyOps.Name, "sort": dailyOps.Sort,
+	})
 
 	dailyMid := []Permission{
 		{Key: "purchases", Name: "廠商採購作業", Sort: 1, ParentId: &dailyOps.ID},
@@ -366,7 +380,7 @@ func SeedMasterDataPermissions(db *DBManager) {
 	}
 
 	// === 頂層：庫存管理作業 ===
-	inventoryOps := Permission{Key: "inventory-operations", Name: "庫存管理作業", Sort: 6}
+	inventoryOps := Permission{Key: "inventory-operations", Name: "庫存管理作業", Sort: 7}
 	db.GetWrite().Where("key = ?", inventoryOps.Key).FirstOrCreate(&inventoryOps)
 	db.GetWrite().Model(&Permission{}).Where("key = ?", inventoryOps.Key).Updates(map[string]interface{}{
 		"name": inventoryOps.Name, "sort": inventoryOps.Sort,
@@ -401,7 +415,7 @@ func SeedMasterDataPermissions(db *DBManager) {
 	}
 
 	// === 頂層：帳款管理作業 ===
-	accountOps := Permission{Key: "account-operations", Name: "帳款管理作業", Sort: 7}
+	accountOps := Permission{Key: "account-operations", Name: "帳款管理作業", Sort: 8}
 	db.GetWrite().Where("key = ?", accountOps.Key).FirstOrCreate(&accountOps)
 	db.GetWrite().Model(&Permission{}).Where("key = ?", accountOps.Key).Updates(map[string]interface{}{
 		"name": accountOps.Name, "sort": accountOps.Sort,
@@ -435,7 +449,7 @@ func SeedMasterDataPermissions(db *DBManager) {
 	}
 
 	// === 頂層：統計報表作業 ===
-	statisticalReports := Permission{Key: "statistical-reports", Name: "統計報表作業", Sort: 8}
+	statisticalReports := Permission{Key: "statistical-reports", Name: "統計報表作業", Sort: 9}
 	db.GetWrite().Where("key = ?", statisticalReports.Key).FirstOrCreate(&statisticalReports)
 	db.GetWrite().Model(&Permission{}).Where("key = ?", statisticalReports.Key).Updates(map[string]interface{}{
 		"name": statisticalReports.Name, "sort": statisticalReports.Sort,

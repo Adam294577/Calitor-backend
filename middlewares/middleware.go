@@ -124,6 +124,25 @@ func Middleware() gin.HandlerFunc {
 	}
 }
 
+// HasPermission 回傳當前使用者是否擁有指定權限
+// 供 controller 在業務邏輯中做細項決策時使用（不會回應 403）
+func HasPermission(c *gin.Context, key string) bool {
+	perms, exists := c.Get("Permissions")
+	if !exists {
+		return false
+	}
+	permSlice, ok := perms.([]interface{})
+	if !ok {
+		return false
+	}
+	for _, p := range permSlice {
+		if str, ok := p.(string); ok && str == key {
+			return true
+		}
+	}
+	return false
+}
+
 // RequirePermission 檢查使用者是否擁有指定的任一權限
 func RequirePermission(keys ...string) gin.HandlerFunc {
 	return func(ctx *gin.Context) {
