@@ -3,6 +3,7 @@ package controllers
 import (
 	"math"
 	"net/http"
+	"project/middlewares"
 	"project/models"
 	response "project/services/responses"
 	"strconv"
@@ -116,11 +117,12 @@ func CreateProduct(c *gin.Context) {
 			Category5ID  *int64 `json:"category5_id"`
 		} `json:"category_maps"`
 		ProductVendors []struct {
-			VendorID     int64   `json:"vendor_id"`
-			CostDiscount float64 `json:"cost_discount"`
-			CostStart    float64 `json:"cost_start"`
-			CostLast     float64 `json:"cost_last"`
-			IsPrimary    bool    `json:"is_primary"`
+			VendorID      int64   `json:"vendor_id"`
+			CostDiscount  float64 `json:"cost_discount"`
+			CostStart     float64 `json:"cost_start"`
+			CostLast      float64 `json:"cost_last"`
+			OriginalPrice float64 `json:"original_price"`
+			IsPrimary     bool    `json:"is_primary"`
 		} `json:"product_vendors"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -187,12 +189,13 @@ func CreateProduct(c *gin.Context) {
 		// 建立 ProductVendors
 		for _, pv := range req.ProductVendors {
 			item := models.ProductVendor{
-				ProductID:    product.ID,
-				VendorID:     pv.VendorID,
-				CostDiscount: pv.CostDiscount,
-				CostStart:    pv.CostStart,
-				CostLast:     pv.CostLast,
-				IsPrimary:    pv.IsPrimary,
+				ProductID:     product.ID,
+				VendorID:      pv.VendorID,
+				CostDiscount:  pv.CostDiscount,
+				CostStart:     pv.CostStart,
+				CostLast:      pv.CostLast,
+				OriginalPrice: pv.OriginalPrice,
+				IsPrimary:     pv.IsPrimary,
 			}
 			if err := tx.Create(&item).Error; err != nil {
 				return err
@@ -230,6 +233,11 @@ func UpdateProduct(c *gin.Context) {
 	if err := c.ShouldBindJSON(&rawReq); err != nil {
 		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
 		return
+	}
+
+	// 無「編輯主檔代碼」權限者，忽略 model_code 欄位變更
+	if !middlewares.HasPermission(c, "edit-master-code") {
+		delete(rawReq, "model_code")
 	}
 
 	// 檢查 model_code 唯一性
@@ -335,6 +343,9 @@ func UpdateProduct(c *gin.Context) {
 				}
 				if v, ok := m["cost_last"].(float64); ok {
 					pv.CostLast = v
+				}
+				if v, ok := m["original_price"].(float64); ok {
+					pv.OriginalPrice = v
 				}
 				if v, ok := m["is_primary"].(bool); ok {
 					pv.IsPrimary = v

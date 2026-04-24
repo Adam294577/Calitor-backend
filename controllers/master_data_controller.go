@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"net/http"
+	"project/middlewares"
 	"project/models"
 	response "project/services/responses"
 	"strconv"
@@ -78,6 +79,11 @@ func UpdateBrand(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
 		return
+	}
+
+	// 無「編輯主檔代碼」權限者，忽略 code 欄位變更
+	if !middlewares.HasPermission(c, "edit-master-code") {
+		req.Code = ""
 	}
 
 	db := models.PostgresNew()
@@ -208,6 +214,11 @@ func UpdateLocation(c *gin.Context) {
 		return
 	}
 
+	// 無「編輯主檔代碼」權限者，忽略 code 欄位變更
+	if !middlewares.HasPermission(c, "edit-master-code") {
+		req.Code = ""
+	}
+
 	db := models.PostgresNew()
 	defer db.Close()
 
@@ -335,6 +346,11 @@ func UpdatePostalArea(c *gin.Context) {
 		return
 	}
 
+	// 無「編輯主檔代碼」權限者，忽略 code 欄位變更
+	if !middlewares.HasPermission(c, "edit-master-code") {
+		req.Code = ""
+	}
+
 	db := models.PostgresNew()
 	defer db.Close()
 
@@ -453,6 +469,11 @@ func UpdateMemberTier(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
 		return
+	}
+
+	// 無「編輯主檔代碼」權限者，忽略 code 欄位變更
+	if !middlewares.HasPermission(c, "edit-master-code") {
+		req.Code = ""
 	}
 
 	db := models.PostgresNew()
@@ -633,7 +654,7 @@ func CreateCurrency(c *gin.Context) {
 		Name         string  `json:"name" binding:"required"`
 		Symbol       string  `json:"symbol"`
 		ExchangeRate float64 `json:"exchange_rate"`
-		IsActive *bool  `json:"is_active"`
+		IsActive     *bool   `json:"is_active"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.Fail(http.StatusBadRequest, "請填寫完整資料").Send()
@@ -680,6 +701,11 @@ func UpdateCurrency(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
 		return
+	}
+
+	// 無「編輯主檔代碼」權限者，忽略 code 欄位變更
+	if !middlewares.HasPermission(c, "edit-master-code") {
+		req.Code = ""
 	}
 
 	db := models.PostgresNew()

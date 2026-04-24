@@ -1,7 +1,9 @@
 package controllers
 
 import (
+	"fmt"
 	"net/http"
+	"project/middlewares"
 	"project/models"
 	response "project/services/responses"
 	"strconv"
@@ -133,6 +135,11 @@ func UpdateVendor(c *gin.Context) {
 		return
 	}
 
+	// 無「編輯主檔代碼」權限者，忽略 code 欄位變更
+	if req.Code != nil && !middlewares.HasPermission(c, "edit-master-code") {
+		req.Code = nil
+	}
+
 	if req.Code != nil && *req.Code != "" && *req.Code != existing.Code {
 		var count int64
 		db.GetRead().Model(&models.Vendor{}).Where("code = ? AND id != ?", *req.Code, id).Count(&count)
@@ -168,4 +175,81 @@ func DeleteVendor(c *gin.Context) {
 	db.GetWrite().Delete(&models.Vendor{}, id)
 	invalidateListCache("vendors")
 	resp.Success("刪除成功").Send()
+}
+
+// GetVendorRecentPurchasePrice 查指定廠商對特定商品+尺碼的「最近一次採購價」
+// 用於條碼進貨切換到無候選廠商時的價格預設
+// 三層 fallback:該廠商歷史採購 → 商品建檔原幣價 (Product.OriginalPrice) → 0
+func GetVendorRecentPurchasePrice(c *gin.Context) {
+	resp := response.New(c)
+	vendorID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		resp.Fail(http.StatusBadRequest, "無效的廠商 ID").Send()
+		return
+	}
+	productIDStr := c.Query("product_id")
+	sizeOptionIDStr := c.Query("size_option_id")
+	productID, err := strconv.ParseInt(productIDStr, 10, 64)
+	if err != nil {
+		resp.Fail(http.StatusBadRequest, "無效的商品 ID").Send()
+		return
+	}
+	sizeOptionID, err := strconv.ParseInt(sizeOptionIDStr, 10, 64)
+	if err != nil {
+		resp.Fail(http.StatusBadRequest, "無效的尺碼選項 ID").Send()
+		return
+	}
+
+	db := models.PostgresNew()
+	defer db.Close()
+
+	// Layer 1: 查該廠商對此 (product, size) 的最近一次採購
+	type row struct {
+		PurchasePrice float64
+		PurchaseNo    string
+		CurrencyCode  string
+		PurchaseDate  string
+	}
+	var r row
+	err = db.GetRead().Table("purchase_items pi").
+		Select("pi.purchase_price, p.purchase_no, p.currency_code, p.purchase_date").
+		Joins("JOIN purchase_item_sizes pis ON pis.purchase_item_id = pi.id").
+		Joins("JOIN purchases p ON p.id = pi.purchase_id AND p.deleted_at IS NULL").
+		Where("p.vendor_id = ? AND pi.product_id = ? AND pis.size_option_id = ?", vendorID, productID, sizeOptionID).
+		Order("p.purchase_date DESC, pi.id DESC").
+		Limit(1).
+		Scan(&r).Error
+	if err == nil && r.PurchaseNo != "" {
+		cc := r.CurrencyCode
+		if cc == "" {
+			cc = "RMB"
+		}
+		resp.Success("成功").SetData(map[string]interface{}{
+			"purchase_price": r.PurchasePrice,
+			"currency_code":  cc,
+			"source":         "history",
+			"hint":           fmt.Sprintf("來自採購單 %s", r.PurchaseNo),
+		}).Send()
+		return
+	}
+
+	// Layer 2: 商品建檔原幣價
+	var product models.Product
+	if err := db.GetRead().Where("id = ?", productID).First(&product).Error; err == nil && product.OriginalPrice > 0 {
+		resp.Success("成功").SetData(map[string]interface{}{
+			"purchase_price": product.OriginalPrice,
+			"currency_code":  "RMB",
+			"source":         "product",
+			"hint":           "商品建檔原幣價",
+		}).Send()
+		return
+	}
+
+	// Layer 3: empty
+	resp.Success("成功").SetData(map[string]interface{}{
+		"purchase_price": 0.0,
+		"currency_code":  "",
+		"source":         "empty",
+		"hint":           "",
+	}).Send()
 }

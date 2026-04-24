@@ -3,6 +3,7 @@ package controllers
 import (
 	"fmt"
 	"net/http"
+	"project/middlewares"
 	"project/models"
 	response "project/services/responses"
 	"strconv"
@@ -141,6 +142,11 @@ func UpdateProductCategoryByLevel(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
 		return
+	}
+
+	// 無「編輯主檔代碼」權限者，忽略 code 欄位變更
+	if !middlewares.HasPermission(c, "edit-master-code") {
+		req.Code = ""
 	}
 
 	db := models.PostgresNew()
