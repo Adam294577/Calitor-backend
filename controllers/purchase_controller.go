@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"project/models"
 	"project/services/delivery"
+	"project/services/purchase"
 	response "project/services/responses"
 	"strconv"
 
@@ -432,13 +433,7 @@ func StopPurchase(c *gin.Context) {
 	}
 
 	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&models.PurchaseItem{}).Where("purchase_id = ? AND cancel_flag < 2", id).Update("cancel_flag", 2).Error; err != nil {
-			return err
-		}
-		if err := tx.Model(&models.Purchase{}).Where("id = ?", id).Update("is_stopped", true).Error; err != nil {
-			return err
-		}
-		return delivery.UpdateDeliveryStatus(tx, id)
+		return purchase.Stop(tx, id)
 	})
 	if err != nil {
 		resp.Panic(err).Send()
@@ -452,93 +447,21 @@ func StopPurchase(c *gin.Context) {
 // 同一型號可能來自多張採購單，每筆都獨立列出
 func SearchPurchaseItems(c *gin.Context) {
 	resp := response.New(c)
-	db := models.PostgresNew()
-	defer db.Close()
-
 	vendorID := c.Query("vendor_id")
 	if vendorID == "" {
 		resp.Fail(400, "請提供 vendor_id").Send()
 		return
 	}
 
-	// 查該廠商未交齊且未停交的採購單中，未停交明細
-	query := db.GetRead().
-		Where("purchase_items.cancel_flag < 2").
-		Joins("JOIN purchases ON purchases.id = purchase_items.purchase_id AND purchases.deleted_at IS NULL AND purchases.delivery_status < 2 AND purchases.vendor_id = ?", vendorID).
-		Preload("Product").
-		Preload("Product.Size1Group.Options", func(db *gorm.DB) *gorm.DB {
-			return db.Order("sort_order ASC")
-		}).
-		Preload("Product.Size2Group.Options", func(db *gorm.DB) *gorm.DB {
-			return db.Order("sort_order ASC")
-		}).
-		Preload("Product.Size3Group.Options", func(db *gorm.DB) *gorm.DB {
-			return db.Order("sort_order ASC")
-		}).
-		Preload("Product.CategoryMaps", func(db *gorm.DB) *gorm.DB {
-			return db.Where("category_type = 5")
-		}).
-		Preload("Product.CategoryMaps.Category5").
-		Preload("SizeGroup.Options", func(db *gorm.DB) *gorm.DB {
-			return db.Order("sort_order ASC")
-		}).
-		Preload("Sizes").
-		Order("purchase_items.id DESC")
+	db := models.PostgresNew()
+	defer db.Close()
 
-	if v := c.Query("customer_id"); v != "" {
-		query = query.Where("purchases.customer_id = ?", v)
-	}
-
-	// 型號搜尋
-	if v := c.Query("search"); v != "" {
-		like := "%" + v + "%"
-		query = query.Where("purchase_items.product_id IN (SELECT id FROM products WHERE deleted_at IS NULL AND (model_code ILIKE ? OR name_spec ILIKE ?))", like, like)
-	}
-
-	var items []models.PurchaseItem
-	if err := query.Limit(50).Find(&items).Error; err != nil {
-		resp.Panic(err)
+	result, err := purchase.SearchItems(db.GetRead(), vendorID, c.Query("customer_id"), c.Query("search"))
+	if err != nil {
+		resp.Panic(err).Send()
 		return
 	}
-
-	// 查每筆明細的採購單號與幣別（幣別用於前端換算）
-	type purchaseRef struct {
-		ID           int64
-		PurchaseNo   string
-		CurrencyCode string
-	}
-	var purchaseIDs []int64
-	for _, item := range items {
-		purchaseIDs = append(purchaseIDs, item.PurchaseID)
-	}
-	purchaseNoMap := map[int64]string{}
-	purchaseCurrencyMap := map[int64]string{}
-	if len(purchaseIDs) > 0 {
-		var refs []purchaseRef
-		if err := db.GetRead().Model(&models.Purchase{}).Select("id, purchase_no, currency_code").Where("id IN ?", purchaseIDs).Scan(&refs).Error; err != nil {
-			resp.Panic(err)
-			return
-		}
-		for _, r := range refs {
-			purchaseNoMap[r.ID] = r.PurchaseNo
-			purchaseCurrencyMap[r.ID] = r.CurrencyCode
-		}
-	}
-
-	// 查已進貨數量
-	var allItemIDs []int64
-	for _, item := range items {
-		allItemIDs = append(allItemIDs, item.ID)
-	}
-	delivered := delivery.DeliveredQtyMap(db.GetRead(), allItemIDs)
-
-	resp.Success("成功").SetData(map[string]interface{}{
-		"items":                 items,
-		"purchase_no_map":       purchaseNoMap,
-		"purchase_currency_map": purchaseCurrencyMap,
-		"delivered":             delivered,
-		"stock_map":             map[string]int{},
-	}).Send()
+	resp.Success("成功").SetData(result).Send()
 }
 
 // DeletePurchase 軟刪除採購單

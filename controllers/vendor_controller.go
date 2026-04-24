@@ -1,10 +1,10 @@
 package controllers
 
 import (
-	"fmt"
 	"net/http"
 	"project/models"
 	"project/services/permission"
+	"project/services/purchase"
 	response "project/services/responses"
 	"strconv"
 	"time"
@@ -185,14 +185,12 @@ func GetVendorRecentPurchasePrice(c *gin.Context) {
 		resp.Fail(http.StatusBadRequest, "無效的廠商 ID").Send()
 		return
 	}
-	productIDStr := c.Query("product_id")
-	sizeOptionIDStr := c.Query("size_option_id")
-	productID, err := strconv.ParseInt(productIDStr, 10, 64)
+	productID, err := strconv.ParseInt(c.Query("product_id"), 10, 64)
 	if err != nil {
 		resp.Fail(http.StatusBadRequest, "無效的商品 ID").Send()
 		return
 	}
-	sizeOptionID, err := strconv.ParseInt(sizeOptionIDStr, 10, 64)
+	sizeOptionID, err := strconv.ParseInt(c.Query("size_option_id"), 10, 64)
 	if err != nil {
 		resp.Fail(http.StatusBadRequest, "無效的尺碼選項 ID").Send()
 		return
@@ -201,53 +199,6 @@ func GetVendorRecentPurchasePrice(c *gin.Context) {
 	db := models.PostgresNew()
 	defer db.Close()
 
-	// Layer 1: 查該廠商對此 (product, size) 的最近一次採購
-	type row struct {
-		PurchasePrice float64
-		PurchaseNo    string
-		CurrencyCode  string
-		PurchaseDate  string
-	}
-	var r row
-	err = db.GetRead().Table("purchase_items pi").
-		Select("pi.purchase_price, p.purchase_no, p.currency_code, p.purchase_date").
-		Joins("JOIN purchase_item_sizes pis ON pis.purchase_item_id = pi.id").
-		Joins("JOIN purchases p ON p.id = pi.purchase_id AND p.deleted_at IS NULL").
-		Where("p.vendor_id = ? AND pi.product_id = ? AND pis.size_option_id = ?", vendorID, productID, sizeOptionID).
-		Order("p.purchase_date DESC, pi.id DESC").
-		Limit(1).
-		Scan(&r).Error
-	if err == nil && r.PurchaseNo != "" {
-		cc := r.CurrencyCode
-		if cc == "" {
-			cc = "RMB"
-		}
-		resp.Success("成功").SetData(map[string]interface{}{
-			"purchase_price": r.PurchasePrice,
-			"currency_code":  cc,
-			"source":         "history",
-			"hint":           fmt.Sprintf("來自採購單 %s", r.PurchaseNo),
-		}).Send()
-		return
-	}
-
-	// Layer 2: 商品建檔原幣價
-	var product models.Product
-	if err := db.GetRead().Where("id = ?", productID).First(&product).Error; err == nil && product.OriginalPrice > 0 {
-		resp.Success("成功").SetData(map[string]interface{}{
-			"purchase_price": product.OriginalPrice,
-			"currency_code":  "RMB",
-			"source":         "product",
-			"hint":           "商品建檔原幣價",
-		}).Send()
-		return
-	}
-
-	// Layer 3: empty
-	resp.Success("成功").SetData(map[string]interface{}{
-		"purchase_price": 0.0,
-		"currency_code":  "",
-		"source":         "empty",
-		"hint":           "",
-	}).Send()
+	result := purchase.RecentPrice(db.GetRead(), vendorID, productID, sizeOptionID)
+	resp.Success("成功").SetData(result).Send()
 }

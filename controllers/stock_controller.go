@@ -7,39 +7,12 @@ import (
 	"project/services/delivery"
 	"project/services/inventory"
 	response "project/services/responses"
+	stocksvc "project/services/stock"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
-
-// distinctPurchaseIDs 從一組 purchaseItemID 查詢所屬的 purchase_id 去重清單
-func distinctPurchaseIDs(db *gorm.DB, purchaseItemIDs []int64) []int64 {
-	if len(purchaseItemIDs) == 0 {
-		return nil
-	}
-	var ids []int64
-	db.Model(&models.PurchaseItem{}).
-		Distinct("purchase_id").
-		Where("id IN ?", purchaseItemIDs).
-		Pluck("purchase_id", &ids)
-	return ids
-}
-
-// recalcPurchasesDeliveryStatus 對多個採購單呼叫 UpdateDeliveryStatus
-func recalcPurchasesDeliveryStatus(tx *gorm.DB, purchaseIDs []int64) error {
-	seen := map[int64]bool{}
-	for _, pid := range purchaseIDs {
-		if pid == 0 || seen[pid] {
-			continue
-		}
-		seen[pid] = true
-		if err := delivery.UpdateDeliveryStatus(tx, pid); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 
 // GetStocks 進貨單列表
 func GetStocks(c *gin.Context) {
@@ -365,11 +338,11 @@ func CreateStock(c *gin.Context) {
 				newItemIDs = append(newItemIDs, *reqItem.PurchaseItemID)
 			}
 		}
-		purchaseIDs := distinctPurchaseIDs(tx, newItemIDs)
+		purchaseIDs := stocksvc.DistinctPurchaseIDs(tx, newItemIDs)
 		if stock.PurchaseID != nil {
 			purchaseIDs = append(purchaseIDs, *stock.PurchaseID)
 		}
-		if err := recalcPurchasesDeliveryStatus(tx, purchaseIDs); err != nil {
+		if err := stocksvc.RecalcPurchasesDeliveryStatus(tx, purchaseIDs); err != nil {
 			return err
 		}
 
@@ -594,14 +567,14 @@ func UpdateStock(c *gin.Context) {
 				newPurchaseItemIDs = append(newPurchaseItemIDs, *reqItem.PurchaseItemID)
 			}
 		}
-		affectedPurchaseIDs := distinctPurchaseIDs(tx, append(oldPurchaseItemIDs, newPurchaseItemIDs...))
+		affectedPurchaseIDs := stocksvc.DistinctPurchaseIDs(tx, append(oldPurchaseItemIDs, newPurchaseItemIDs...))
 		if oldPurchaseID != nil {
 			affectedPurchaseIDs = append(affectedPurchaseIDs, *oldPurchaseID)
 		}
 		if req.PurchaseID != nil {
 			affectedPurchaseIDs = append(affectedPurchaseIDs, *req.PurchaseID)
 		}
-		if err := recalcPurchasesDeliveryStatus(tx, affectedPurchaseIDs); err != nil {
+		if err := stocksvc.RecalcPurchasesDeliveryStatus(tx, affectedPurchaseIDs); err != nil {
 			return err
 		}
 
@@ -674,11 +647,11 @@ func DeleteStock(c *gin.Context) {
 			return err
 		}
 		// 更新關聯採購單交貨狀態：items 涉及的 purchase_id 集合 + 舊 header 的 PurchaseID
-		affectedPurchaseIDs := distinctPurchaseIDs(tx, oldPurchaseItemIDs)
+		affectedPurchaseIDs := stocksvc.DistinctPurchaseIDs(tx, oldPurchaseItemIDs)
 		if stock.PurchaseID != nil {
 			affectedPurchaseIDs = append(affectedPurchaseIDs, *stock.PurchaseID)
 		}
-		if err := recalcPurchasesDeliveryStatus(tx, affectedPurchaseIDs); err != nil {
+		if err := stocksvc.RecalcPurchasesDeliveryStatus(tx, affectedPurchaseIDs); err != nil {
 			return err
 		}
 		return nil
