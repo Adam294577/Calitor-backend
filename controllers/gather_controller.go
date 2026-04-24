@@ -180,10 +180,10 @@ func GetUnclearedShipments(c *gin.Context) {
 	}
 
 	type shipAgg struct {
-		ShipmentID     int64   `json:"shipment_id"`
-		TotalWriteOff  float64 `json:"total_write_off"`
-		TotalDiscount  float64 `json:"total_discount"`
-		TotalOther     float64 `json:"total_other"`
+		ShipmentID    int64   `json:"shipment_id"`
+		TotalWriteOff float64 `json:"total_write_off"`
+		TotalDiscount float64 `json:"total_discount"`
+		TotalOther    float64 `json:"total_other"`
 	}
 	var aggs []shipAgg
 
@@ -239,26 +239,26 @@ func GetUnclearedShipments(c *gin.Context) {
 
 // gatherRequest 收款單請求
 type gatherRequest struct {
-	GatherDate     string               `json:"gather_date"`
-	CustomerID     int64                `json:"customer_id"`
-	CheckNo        string               `json:"check_no"`
-	CheckDueDate   string               `json:"check_due_date"`
-	CheckAmount    float64              `json:"check_amount"`
-	GatherAmount   float64              `json:"gather_amount"`
-	DiscountAmount float64              `json:"discount_amount"`
-	OtherDeduct    float64              `json:"other_deduct"`
-	ShipTotal      float64              `json:"ship_total"`
-	ActualAmount      float64              `json:"actual_amount"`
-	PrepaidCreditUsed float64              `json:"prepaid_credit_used"`
-	GatherPersonID    *int64               `json:"gather_person_id"`
-	OpenBank       string               `json:"open_bank"`
-	BankAccountNo  string               `json:"bank_account_no"`
-	StartBrandID   string               `json:"start_brand_id"`
-	EndBrandID     string               `json:"end_brand_id"`
-	Remark         string               `json:"remark"`
-	DealMode       int                  `json:"deal_mode"`
-	CloseMonth     string               `json:"close_month"`
-	Items          []gatherDetailRequest `json:"items"`
+	GatherDate        string                `json:"gather_date"`
+	CustomerID        int64                 `json:"customer_id"`
+	CheckNo           string                `json:"check_no"`
+	CheckDueDate      string                `json:"check_due_date"`
+	CheckAmount       float64               `json:"check_amount"`
+	GatherAmount      float64               `json:"gather_amount"`
+	DiscountAmount    float64               `json:"discount_amount"`
+	OtherDeduct       float64               `json:"other_deduct"`
+	ShipTotal         float64               `json:"ship_total"`
+	ActualAmount      float64               `json:"actual_amount"`
+	PrepaidCreditUsed float64               `json:"prepaid_credit_used"`
+	GatherPersonID    *int64                `json:"gather_person_id"`
+	OpenBank          string                `json:"open_bank"`
+	BankAccountNo     string                `json:"bank_account_no"`
+	StartBrandID      string                `json:"start_brand_id"`
+	EndBrandID        string                `json:"end_brand_id"`
+	Remark            string                `json:"remark"`
+	DealMode          int                   `json:"deal_mode"`
+	CloseMonth        string                `json:"close_month"`
+	Items             []gatherDetailRequest `json:"items"`
 }
 
 type gatherDetailRequest struct {
@@ -319,25 +319,25 @@ func CreateGather(c *gin.Context) {
 
 	err := db.GetWrite().Transaction(func(tx *gorm.DB) error {
 		gather := models.Gather{
-			GatherNo:       gatherNo,
-			GatherDate:     req.GatherDate,
-			CustomerID:     req.CustomerID,
-			CheckNo:        req.CheckNo,
-			CheckDueDate:   req.CheckDueDate,
-			CheckAmount:    req.CheckAmount,
-			GatherAmount:   req.GatherAmount,
-			DiscountAmount: req.DiscountAmount,
-			OtherDeduct:    req.OtherDeduct,
-			ShipTotal:      req.ShipTotal,
+			GatherNo:          gatherNo,
+			GatherDate:        req.GatherDate,
+			CustomerID:        req.CustomerID,
+			CheckNo:           req.CheckNo,
+			CheckDueDate:      req.CheckDueDate,
+			CheckAmount:       req.CheckAmount,
+			GatherAmount:      req.GatherAmount,
+			DiscountAmount:    req.DiscountAmount,
+			OtherDeduct:       req.OtherDeduct,
+			ShipTotal:         req.ShipTotal,
 			ActualAmount:      req.ActualAmount,
 			PrepaidCreditUsed: req.PrepaidCreditUsed,
 			GatherPersonID:    req.GatherPersonID,
-			RecorderID:     recorderID,
-			OpenBank:       req.OpenBank,
-			BankAccountNo:  req.BankAccountNo,
-			StartBrandID:   req.StartBrandID,
-			EndBrandID:     req.EndBrandID,
-			Remark:         req.Remark,
+			RecorderID:        recorderID,
+			OpenBank:          req.OpenBank,
+			BankAccountNo:     req.BankAccountNo,
+			StartBrandID:      req.StartBrandID,
+			EndBrandID:        req.EndBrandID,
+			Remark:            req.Remark,
 		}
 		if err := tx.Create(&gather).Error; err != nil {
 			return err
@@ -427,23 +427,23 @@ func UpdateGather(c *gin.Context) {
 
 		// 3. 更新主表
 		tx.Model(&models.Gather{}).Where("id = ?", gatherID).Updates(map[string]interface{}{
-			"gather_date":     req.GatherDate,
-			"customer_id":     req.CustomerID,
-			"check_no":        req.CheckNo,
-			"check_due_date":  req.CheckDueDate,
-			"check_amount":    req.CheckAmount,
-			"gather_amount":   req.GatherAmount,
-			"discount_amount": req.DiscountAmount,
-			"other_deduct":    req.OtherDeduct,
-			"ship_total":      req.ShipTotal,
-			"actual_amount":        req.ActualAmount,
+			"gather_date":         req.GatherDate,
+			"customer_id":         req.CustomerID,
+			"check_no":            req.CheckNo,
+			"check_due_date":      req.CheckDueDate,
+			"check_amount":        req.CheckAmount,
+			"gather_amount":       req.GatherAmount,
+			"discount_amount":     req.DiscountAmount,
+			"other_deduct":        req.OtherDeduct,
+			"ship_total":          req.ShipTotal,
+			"actual_amount":       req.ActualAmount,
 			"prepaid_credit_used": req.PrepaidCreditUsed,
 			"gather_person_id":    req.GatherPersonID,
-			"open_bank":       req.OpenBank,
-			"bank_account_no": req.BankAccountNo,
-			"start_brand_id":  req.StartBrandID,
-			"end_brand_id":    req.EndBrandID,
-			"remark":          req.Remark,
+			"open_bank":           req.OpenBank,
+			"bank_account_no":     req.BankAccountNo,
+			"start_brand_id":      req.StartBrandID,
+			"end_brand_id":        req.EndBrandID,
+			"remark":              req.Remark,
 		})
 
 		// 4. 重建 details 並回寫

@@ -134,22 +134,22 @@ func CreateRetailSell(c *gin.Context) {
 	defer db.Close()
 
 	var req struct {
-		SellDate     string  `json:"sell_date" binding:"required"`
-		CustomerID   int64   `json:"customer_id" binding:"required"`
-		SellStore    string  `json:"sell_store"`
-		SellPersonID *int64  `json:"sell_person_id"`
-		CashAmount   float64 `json:"cash_amount"`
-		CardAmount   float64 `json:"card_amount"`
-		GiftAmount   float64 `json:"gift_amount"`
-		TaxRate      float64 `json:"tax_rate"`
-		TaxID        string  `json:"tax_id"`
+		SellDate      string  `json:"sell_date" binding:"required"`
+		CustomerID    int64   `json:"customer_id" binding:"required"`
+		SellStore     string  `json:"sell_store"`
+		SellPersonID  *int64  `json:"sell_person_id"`
+		CashAmount    float64 `json:"cash_amount"`
+		CardAmount    float64 `json:"card_amount"`
+		GiftAmount    float64 `json:"gift_amount"`
+		TaxRate       float64 `json:"tax_rate"`
+		TaxID         string  `json:"tax_id"`
 		InvoiceAmount float64 `json:"invoice_amount"`
-		CardType     string  `json:"card_type"`
-		GiftType     string  `json:"gift_type"`
-		CreditCardNo string  `json:"credit_card_no"`
-		IsAbnormal   bool    `json:"is_abnormal"`
-		Remark       string  `json:"remark"`
-		Items        []struct {
+		CardType      string  `json:"card_type"`
+		GiftType      string  `json:"gift_type"`
+		CreditCardNo  string  `json:"credit_card_no"`
+		IsAbnormal    bool    `json:"is_abnormal"`
+		Remark        string  `json:"remark"`
+		Items         []struct {
 			ProductID   int64   `json:"product_id"`
 			SizeGroupID *int64  `json:"size_group_id"`
 			MemberID    *int64  `json:"member_id"`
@@ -363,22 +363,22 @@ func UpdateRetailSell(c *gin.Context) {
 	}
 
 	var req struct {
-		SellDate     string  `json:"sell_date"`
-		CustomerID   int64   `json:"customer_id"`
-		SellStore    string  `json:"sell_store"`
-		SellPersonID *int64  `json:"sell_person_id"`
-		CashAmount   float64 `json:"cash_amount"`
-		CardAmount   float64 `json:"card_amount"`
-		GiftAmount   float64 `json:"gift_amount"`
-		TaxRate      float64 `json:"tax_rate"`
-		TaxID        string  `json:"tax_id"`
+		SellDate      string  `json:"sell_date"`
+		CustomerID    int64   `json:"customer_id"`
+		SellStore     string  `json:"sell_store"`
+		SellPersonID  *int64  `json:"sell_person_id"`
+		CashAmount    float64 `json:"cash_amount"`
+		CardAmount    float64 `json:"card_amount"`
+		GiftAmount    float64 `json:"gift_amount"`
+		TaxRate       float64 `json:"tax_rate"`
+		TaxID         string  `json:"tax_id"`
 		InvoiceAmount float64 `json:"invoice_amount"`
-		CardType     string  `json:"card_type"`
-		GiftType     string  `json:"gift_type"`
-		CreditCardNo string  `json:"credit_card_no"`
-		IsAbnormal   bool    `json:"is_abnormal"`
-		Remark       string  `json:"remark"`
-		Items        []struct {
+		CardType      string  `json:"card_type"`
+		GiftType      string  `json:"gift_type"`
+		CreditCardNo  string  `json:"credit_card_no"`
+		IsAbnormal    bool    `json:"is_abnormal"`
+		Remark        string  `json:"remark"`
+		Items         []struct {
 			ProductID   int64   `json:"product_id"`
 			SizeGroupID *int64  `json:"size_group_id"`
 			MemberID    *int64  `json:"member_id"`
@@ -453,7 +453,7 @@ func UpdateRetailSell(c *gin.Context) {
 
 		// 更新主表（付款金額在明細建立後彙總）
 		updates := map[string]interface{}{
-			"sell_date":       req.SellDate,
+			"sell_date":      req.SellDate,
 			"customer_id":    req.CustomerID,
 			"sell_store":     req.SellStore,
 			"sell_person_id": req.SellPersonID,

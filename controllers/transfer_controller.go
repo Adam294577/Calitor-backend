@@ -387,12 +387,12 @@ func UpdateTransfer(c *gin.Context) {
 		}
 
 		updates := map[string]interface{}{
-			"transfer_date":     req.TransferDate,
-			"source_store":      req.SourceStore,
+			"transfer_date":      req.TransferDate,
+			"source_store":       req.SourceStore,
 			"source_customer_id": sourceCustomer.ID,
-			"fill_person_id":    req.FillPersonID,
-			"recorder_id":       recorderID,
-			"remark":            req.Remark,
+			"fill_person_id":     req.FillPersonID,
+			"recorder_id":        recorderID,
+			"remark":             req.Remark,
 		}
 		if err := tx.Model(&existing).Updates(updates).Error; err != nil {
 			return err

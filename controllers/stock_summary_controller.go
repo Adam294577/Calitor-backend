@@ -14,10 +14,10 @@ import (
 
 // stockSummaryRow 廠商進貨統計列
 type stockSummaryRow struct {
-	GroupLabel  string  `json:"group_label"`
-	VendorID    int64   `json:"vendor_id,omitempty"`
-	VendorName  string  `json:"vendor_name,omitempty"`
-	ModelCode   string  `json:"model_code,omitempty"`
+	GroupLabel string `json:"group_label"`
+	VendorID   int64  `json:"vendor_id,omitempty"`
+	VendorName string `json:"vendor_name,omitempty"`
+	ModelCode  string `json:"model_code,omitempty"`
 
 	StockQty     int     `json:"stock_qty"`
 	StockAmount  float64 `json:"stock_amount"`

@@ -14,10 +14,10 @@ import (
 
 // shipmentSummaryRow 客戶出貨統計列
 type shipmentSummaryRow struct {
-	GroupLabel   string  `json:"group_label"`
-	CustomerCode string  `json:"customer_code,omitempty"`
-	CustomerName string  `json:"customer_name,omitempty"`
-	ModelCode    string  `json:"model_code,omitempty"`
+	GroupLabel   string `json:"group_label"`
+	CustomerCode string `json:"customer_code,omitempty"`
+	CustomerName string `json:"customer_name,omitempty"`
+	ModelCode    string `json:"model_code,omitempty"`
 
 	ShipQty      int     `json:"ship_qty"`
 	ShipAmount   float64 `json:"ship_amount"`
@@ -55,7 +55,7 @@ func GetShipmentSummary(c *gin.Context) {
 	salesmanIDs := c.QueryArray("salesman_id")
 	modelCodes := c.QueryArray("model_code")
 	brandIDStrs := c.QueryArray("brand_id")
-	shipModeStr := c.Query("ship_mode")   // "" | "3" | "4"
+	shipModeStr := c.Query("ship_mode")    // "" | "3" | "4"
 	supplementStr := c.Query("supplement") // "" | "1" | "2"
 	dealModeStr := c.Query("deal_mode")    // "" | "1" | "2"
 	remark := strings.TrimSpace(c.Query("remark"))
