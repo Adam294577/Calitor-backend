@@ -246,6 +246,8 @@ func AllModels() []interface{} {
 		&Gather{},
 		&GatherDetail{},
 		&BankBusiness{},
+		// 系統設定
+		&FirewallIP{},
 	}
 }
 

@@ -109,6 +109,9 @@ func App(HttpServer *gin.Engine) {
 		fmt.Println("⏭ 略過資料表遷移與 Seed（設定 RUN_MIGRATE=true 以啟用）")
 	}
 
+	// 每次啟動都同步環境變數 IP 到 firewall_ips 表（env 仍為 source of truth）
+	models.SyncEnvFirewallIPs(db)
+
 	// 一次性遷移：將 role_permissions 中的父節點展開為葉子節點
 	// models.MigrateRolePermissionsToLeaf(db)
 

@@ -245,6 +245,8 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.GET("/modifies", middlewares.RequirePermission("modify.view"), controllers.GetModifies)
 		adminAuth.GET("/modifies/:id", middlewares.RequirePermission("modify.view"), controllers.GetModify)
 		adminAuth.POST("/modifies", middlewares.RequirePermission("modify.create"), controllers.CreateModify)
+		adminAuth.PUT("/modifies/:id", middlewares.RequirePermission("modify.edit"), controllers.UpdateModify)
+		adminAuth.DELETE("/modifies/:id", middlewares.RequirePermission("modify.delete"), controllers.DeleteModify)
 
 		// 庫存管理 - 店櫃調撥
 		adminAuth.GET("/transfers", middlewares.RequirePermission("transfer.view"), controllers.GetTransfers)
@@ -283,6 +285,12 @@ func RouterRegister(route *gin.Engine) {
 		// 圖片上傳
 		adminAuth.POST("/upload/product-image", middlewares.RequirePermission("product-mgmt.create"), controllers.UploadProductImage)
 		adminAuth.DELETE("/upload/product-image", middlewares.RequirePermission("product-mgmt.delete"), controllers.DeleteProductImage)
+
+		// 系統設定 - 防火牆 IP
+		adminAuth.GET("/firewall-ips", middlewares.RequirePermission("firewall-ips.view"), controllers.GetFirewallIPs)
+		adminAuth.POST("/firewall-ips", middlewares.RequirePermission("firewall-ips.create"), controllers.CreateFirewallIP)
+		adminAuth.PUT("/firewall-ips/:id", middlewares.RequirePermission("firewall-ips.edit"), controllers.UpdateFirewallIP)
+		adminAuth.DELETE("/firewall-ips/:id", middlewares.RequirePermission("firewall-ips.delete"), controllers.DeleteFirewallIP)
 
 	}
 }

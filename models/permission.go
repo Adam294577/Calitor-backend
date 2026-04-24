@@ -402,6 +402,8 @@ func SeedMasterDataPermissions(db *DBManager) {
 		{Key: "inventory-query.view", Name: "檢視庫存", Sort: 1, ParentId: &inventoryMid[0].ID},
 		{Key: "modify.view", Name: "檢視調整單", Sort: 1, ParentId: &inventoryMid[1].ID},
 		{Key: "modify.create", Name: "新增調整單", Sort: 2, ParentId: &inventoryMid[1].ID},
+		{Key: "modify.edit", Name: "編輯調整單", Sort: 3, ParentId: &inventoryMid[1].ID},
+		{Key: "modify.delete", Name: "刪除調整單", Sort: 4, ParentId: &inventoryMid[1].ID},
 		{Key: "transfer.view", Name: "檢視調撥單", Sort: 1, ParentId: &inventoryMid[2].ID},
 		{Key: "transfer.create", Name: "新增調撥單", Sort: 2, ParentId: &inventoryMid[2].ID},
 		{Key: "transfer.edit", Name: "編輯調撥單", Sort: 3, ParentId: &inventoryMid[2].ID},
@@ -475,6 +477,38 @@ func SeedMasterDataPermissions(db *DBManager) {
 		{Key: "vendor-stock-summary.view", Name: "檢視廠商進貨統計", Sort: 1, ParentId: &statisticalMid[3].ID},
 	}
 	for _, p := range statisticalLeaf {
+		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&p)
+		db.GetWrite().Model(&Permission{}).Where("key = ?", p.Key).Updates(map[string]interface{}{
+			"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId,
+		})
+	}
+
+	// === 頂層：系統設定 ===
+	systemSettings := Permission{Key: "system-settings", Name: "系統設定", Sort: 10}
+	db.GetWrite().Where("key = ?", systemSettings.Key).FirstOrCreate(&systemSettings)
+	db.GetWrite().Model(&Permission{}).Where("key = ?", systemSettings.Key).Updates(map[string]interface{}{
+		"name": systemSettings.Name, "sort": systemSettings.Sort,
+	})
+
+	// 系統設定 - 第二層
+	systemMid := []Permission{
+		{Key: "firewall-ips", Name: "防火牆IP", Sort: 1, ParentId: &systemSettings.ID},
+	}
+	for i, p := range systemMid {
+		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&systemMid[i])
+		db.GetWrite().Model(&Permission{}).Where("key = ?", p.Key).Updates(map[string]interface{}{
+			"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId,
+		})
+	}
+
+	// 系統設定 - 第三層
+	systemLeaf := []Permission{
+		{Key: "firewall-ips.view", Name: "檢視防火牆IP", Sort: 1, ParentId: &systemMid[0].ID},
+		{Key: "firewall-ips.create", Name: "新增防火牆IP", Sort: 2, ParentId: &systemMid[0].ID},
+		{Key: "firewall-ips.edit", Name: "編輯防火牆IP", Sort: 3, ParentId: &systemMid[0].ID},
+		{Key: "firewall-ips.delete", Name: "刪除防火牆IP", Sort: 4, ParentId: &systemMid[0].ID},
+	}
+	for _, p := range systemLeaf {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&p)
 		db.GetWrite().Model(&Permission{}).Where("key = ?", p.Key).Updates(map[string]interface{}{
 			"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId,
