@@ -72,6 +72,10 @@ func GetShipment(c *gin.Context) {
 		Preload("Items", func(db *gorm.DB) *gorm.DB {
 			return db.Order("item_order ASC")
 		}).
+		// 先載 OrderItem，避免最後再 Preload 時重查 shipment_items 覆寫掉已掛好的 Product 關聯
+		Preload("Items.OrderItem").
+		// 與 GetOrder 相同：先明確載入 Product，再掛尺碼組與 category_maps
+		Preload("Items.Product").
 		Preload("Items.Product.Size1Group.Options", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order ASC")
 		}).
@@ -89,7 +93,6 @@ func GetShipment(c *gin.Context) {
 			return db.Order("sort_order ASC")
 		}).
 		Preload("Items.Sizes.SizeOption").
-		Preload("Items.OrderItem").
 		Where("id = ?", id).
 		First(&item).Error
 	if err != nil {
