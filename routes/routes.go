@@ -245,8 +245,6 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.GET("/modifies", middlewares.RequirePermission("modify.view"), controllers.GetModifies)
 		adminAuth.GET("/modifies/:id", middlewares.RequirePermission("modify.view"), controllers.GetModify)
 		adminAuth.POST("/modifies", middlewares.RequirePermission("modify.create"), controllers.CreateModify)
-		adminAuth.PUT("/modifies/:id", middlewares.RequirePermission("modify.edit"), controllers.UpdateModify)
-		adminAuth.DELETE("/modifies/:id", middlewares.RequirePermission("modify.delete"), controllers.DeleteModify)
 
 		// 庫存管理 - 店櫃調撥
 		adminAuth.GET("/transfers", middlewares.RequirePermission("transfer.view"), controllers.GetTransfers)
