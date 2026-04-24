@@ -5,10 +5,10 @@ import (
 	"math"
 	"net/http"
 	"project/models"
+	"project/services/barcode"
 	"project/services/inventory"
 	"project/services/receivable"
 	response "project/services/responses"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -136,7 +136,7 @@ func GetShipment(c *gin.Context) {
 	outstanding := bal.TotalDeal - bal.TotalCharge
 
 	resp.Success("成功").SetData(map[string]interface{}{
-		"shipment":    item,
+		"shipment":     item,
 		"order_no_map": orderNoMap,
 		"outstanding":  outstanding,
 		"credit_limit": customer.CreditLimit,
@@ -849,7 +849,7 @@ func GetCustomerCredit(c *gin.Context) {
 	var bal balRow
 	db.GetRead().Model(&models.Shipment{}).
 		Select("COALESCE(SUM(deal_amount), 0) as total_deal, COALESCE(SUM(charge_amount), 0) as total_charge").
-		Where("customer_id = ? AND deleted_at IS NULL",customerID).
+		Where("customer_id = ? AND deleted_at IS NULL", customerID).
 		Scan(&bal)
 
 	outstanding := bal.TotalDeal - bal.TotalCharge
@@ -879,27 +879,9 @@ func BarcodeParse(c *gin.Context) {
 		return
 	}
 
-	// 1. 查所有 SizeGroup + Options（依 sort_order 排序）
-	var sizeGroups []models.SizeGroup
-	db.GetRead().Preload("Options", func(d *gorm.DB) *gorm.DB {
-		return d.Order("sort_order ASC")
-	}).Find(&sizeGroups)
+	// 1. 載入 SizeGroups(排序好的) + 逐筆解析條碼
+	sgList := barcode.LoadSizeGroups(db.GetRead())
 
-	// 建立 SizeGroup.Code → SizeGroup 對照（code 從長到短排序，方便匹配）
-	type sgInfo struct {
-		ID      int64
-		Code    string
-		Options []models.SizeOption
-	}
-	var sgList []sgInfo
-	for _, sg := range sizeGroups {
-		sgList = append(sgList, sgInfo{ID: sg.ID, Code: sg.Code, Options: sg.Options})
-	}
-	sort.Slice(sgList, func(i, j int) bool {
-		return len(sgList[i].Code) > len(sgList[j].Code)
-	})
-
-	// 2. 解析每筆條碼 → model_code + sizeGroupCode + position
 	type parsedEntry struct {
 		Barcode       string
 		Qty           int
@@ -929,55 +911,21 @@ func BarcodeParse(c *gin.Context) {
 			qty = 1
 		}
 
-		// 嘗試從尾部匹配: {SizeGroupCode}{Position:02d}
-		matched := false
-		for _, sg := range sgList {
-			code := sg.Code
-			// 條碼尾部至少要有 code + 2 位數字，且前面還有 model_code
-			suffixLen := len(code) + 2
-			if len(bc) <= suffixLen {
-				continue
-			}
-			tail := bc[len(bc)-suffixLen:]
-			if !strings.HasPrefix(tail, code) {
-				continue
-			}
-			posStr := tail[len(code):]
-			pos, err := strconv.Atoi(posStr)
-			if err != nil || pos < 1 {
-				continue
-			}
-			// 確認 position 在範圍內
-			if pos > len(sg.Options) {
-				errors = append(errors, errorEntry{
-					Barcode: bc,
-					Reason:  fmt.Sprintf("尺碼位置超出範圍: 第%d格（共%d格）", pos, len(sg.Options)),
-				})
-				matched = true
-				break
-			}
-			opt := sg.Options[pos-1] // 0-based index
-			modelCode := bc[:len(bc)-suffixLen]
-
-			parsed = append(parsed, parsedEntry{
-				Barcode:       bc,
-				Qty:           qty,
-				ModelCode:     modelCode,
-				SizeGroupCode: code,
-				Position:      pos,
-				SizeGroupID:   sg.ID,
-				SizeOptionID:  opt.ID,
-				SizeLabel:     opt.Label,
-			})
-			matched = true
-			break
+		p, perr := barcode.Parse(bc, sgList)
+		if perr != nil {
+			errors = append(errors, errorEntry{Barcode: perr.Barcode, Reason: perr.Reason})
+			continue
 		}
-		if !matched {
-			errors = append(errors, errorEntry{
-				Barcode: bc,
-				Reason:  "無法解析條碼格式",
-			})
-		}
+		parsed = append(parsed, parsedEntry{
+			Barcode:       p.Barcode,
+			Qty:           qty,
+			ModelCode:     p.ModelCode,
+			SizeGroupCode: p.SizeGroupCode,
+			Position:      p.Position,
+			SizeGroupID:   p.SizeGroupID,
+			SizeOptionID:  p.SizeOptionID,
+			SizeLabel:     p.SizeLabel,
+		})
 	}
 
 	// 3. 收集所有 model_code，批次查 Product

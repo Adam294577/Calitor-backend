@@ -20,9 +20,9 @@ type Stock struct {
 	Vendor          *Vendor         `gorm:"foreignKey:VendorID" json:"vendor,omitempty"`
 	PurchaseID      *int64          `gorm:"index" json:"purchase_id"`
 	Purchase        *Purchase       `gorm:"foreignKey:PurchaseID" json:"purchase,omitempty"`
-	StockMode       int             `gorm:"default:1" json:"stock_mode"`           // 1=進貨 2=退貨
-	DealMode        int             `gorm:"default:1" json:"deal_mode"`            // 1=買斷 2=寄賣
-	CurrencyCode    string          `gorm:"type:varchar(20)" json:"currency_code"` // 幣別
+	VendorStockNo   string          `gorm:"type:varchar(50)" json:"vendor_stock_no"` // 廠商單號（備註用，非綁定）
+	StockMode       int             `gorm:"default:1" json:"stock_mode"`             // 1=進貨 2=退貨
+	DealMode        int             `gorm:"default:1" json:"deal_mode"`              // 1=買斷 2=寄賣
 	FillPersonID    *int64          `gorm:"index" json:"fill_person_id"`
 	FillPerson      *Admin          `gorm:"foreignKey:FillPersonID" json:"fill_person,omitempty"`
 	RecorderID      int64           `gorm:"not null;index" json:"recorder_id"`

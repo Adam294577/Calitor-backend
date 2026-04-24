@@ -53,7 +53,7 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.POST("/accounts", middlewares.RequirePermission("accounts.create"), controllers.CreateAccount)
 		adminAuth.PUT("/accounts/:id", middlewares.RequirePermission("accounts.edit"), controllers.UpdateAccount)
 		adminAuth.PUT("/accounts/:id/disable", middlewares.RequirePermission("accounts.disable"), controllers.DisableAccount)
-		adminAuth.PATCH("/accounts/:id/password", middlewares.RequirePermission("accounts.edit"), controllers.ResetAccountPassword)
+		adminAuth.PATCH("/accounts/:id/password", controllers.ResetAccountPassword)
 
 		// 角色管理
 		adminAuth.GET("/roles", middlewares.RequirePermission("roles.view"), controllers.GetRoles)
@@ -152,6 +152,8 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.POST("/vendors", middlewares.RequirePermission("vendor-mgmt.create"), controllers.CreateVendor)
 		adminAuth.PUT("/vendors/:id", middlewares.RequirePermission("vendor-mgmt.edit"), controllers.UpdateVendor)
 		adminAuth.DELETE("/vendors/:id", middlewares.RequirePermission("vendor-mgmt.delete"), controllers.DeleteVendor)
+		// 廠商對特定商品+尺碼的最近一次採購價(條碼進貨切廠商時帶入預設價)
+		adminAuth.GET("/vendors/:id/recent-purchase-price", middlewares.RequirePermission("stocks.create"), controllers.GetVendorRecentPurchasePrice)
 
 		// 主檔 - 會員
 		adminAuth.GET("/members", middlewares.RequirePermission("member-mgmt.view"), controllers.GetMembers)
@@ -179,9 +181,12 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.POST("/purchases", middlewares.RequirePermission("purchases.create"), controllers.CreatePurchase)
 		adminAuth.PUT("/purchases/:id", middlewares.RequirePermission("purchases.edit"), controllers.UpdatePurchase)
 		adminAuth.DELETE("/purchases/:id", middlewares.RequirePermission("purchases.delete"), controllers.DeletePurchase)
+		adminAuth.PUT("/purchases/:id/stop", middlewares.RequirePermission("purchases.edit"), controllers.StopPurchase)
 
 		// 採購單搜尋（供進貨單選擇關聯採購）
 		adminAuth.GET("/purchases/search", middlewares.RequirePermission("stocks.view"), controllers.SearchPurchases)
+		// 採購明細搜尋（供進貨單逐筆選擇商品用，對應出貨端 orders/search-items）
+		adminAuth.GET("/purchases/search-items", middlewares.RequirePermission("stocks.view"), controllers.SearchPurchaseItems)
 
 		// 日常作業 - 廠商進貨
 		adminAuth.GET("/stocks", middlewares.RequirePermission("stocks.view"), controllers.GetStocks)
@@ -191,6 +196,9 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.POST("/stocks", middlewares.RequirePermission("stocks.create"), controllers.CreateStock)
 		adminAuth.PUT("/stocks/:id", middlewares.RequirePermission("stocks.edit"), controllers.UpdateStock)
 		adminAuth.DELETE("/stocks/:id", middlewares.RequirePermission("stocks.delete"), controllers.DeleteStock)
+		// 條碼輸入進貨
+		adminAuth.POST("/stocks/barcode-parse", middlewares.RequirePermission("stocks.create"), controllers.StockBarcodeParse)
+		adminAuth.POST("/stocks/batch", middlewares.RequirePermission("stocks.create"), controllers.CreateStockBatch)
 
 		// 日常作業 - 客戶訂貨
 		adminAuth.GET("/orders", middlewares.RequirePermission("orders.view"), controllers.GetOrders)
