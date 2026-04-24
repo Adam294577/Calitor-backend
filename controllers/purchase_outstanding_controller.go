@@ -9,13 +9,20 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
-// outstandingRow 未交統計列
-type outstandingRow struct {
-	GroupLabel    string         `json:"group_label"`
-	ProductName   string         `json:"product_name,omitempty"`
-	SubLabel      string         `json:"sub_label,omitempty"`
+// purchaseOutstandingRow 採購未交明細列（detail 級，統計由前端 groupBy 聚合）
+type purchaseOutstandingRow struct {
+	PurchaseID    int64          `json:"purchase_id"`
+	PurchaseNo    string         `json:"purchase_no"`
+	PurchaseDate  string         `json:"purchase_date"`
+	VendorID      int64          `json:"vendor_id"`
+	VendorCode    string         `json:"vendor_code"`
+	VendorName    string         `json:"vendor_name"`
+	ModelCode     string         `json:"model_code"`
+	ProductName   string         `json:"product_name"`
+	ExpectedDate  string         `json:"expected_date"`
 	SizeGroupCode string         `json:"size_group_code"`
 	Sizes         map[string]int `json:"sizes"`
 	TotalQty      int            `json:"total_qty"`
@@ -28,17 +35,20 @@ type outstandingSizeCol struct {
 	SortOrder int    `json:"sort_order"`
 }
 
-// GetPurchaseOutstanding 採購未交統計
+// GetPurchaseOutstanding 採購未交明細（統計由前端自行聚合）
 func GetPurchaseOutstanding(c *gin.Context) {
 	resp := response.New(c)
 	db := models.PostgresNew()
 	defer db.Close()
 
-	tab := c.DefaultQuery("tab", "summary")
-	groupBy := c.DefaultQuery("group_by", "model")
 	dateFrom := c.Query("date_from")
 	dateTo := c.Query("date_to")
-	vendorIDStr := c.Query("vendor_id")
+	expectedFrom := c.Query("expected_from")
+	expectedTo := c.Query("expected_to")
+	vendorIDs := c.QueryArray("vendor_id")
+	customerIDs := c.QueryArray("customer_id")
+	modelCodes := c.QueryArray("model_code")
+	purchaseNoSearch := c.Query("purchase_no")
 
 	// 1. 查 purchases WHERE delivery_status < 2
 	query := db.GetRead().Model(&models.Purchase{}).Where("delivery_status < 2")
@@ -49,14 +59,44 @@ func GetPurchaseOutstanding(c *gin.Context) {
 	if dateTo != "" {
 		query = query.Where("purchase_date <= ?", dateTo)
 	}
-	if vendorIDStr != "" {
-		if vid, err := strconv.ParseInt(vendorIDStr, 10, 64); err == nil {
-			query = query.Where("vendor_id = ?", vid)
+	if len(vendorIDs) > 0 {
+		var vids []int64
+		for _, s := range vendorIDs {
+			if vid, err := strconv.ParseInt(s, 10, 64); err == nil {
+				vids = append(vids, vid)
+			}
 		}
+		if len(vids) > 0 {
+			query = query.Where("vendor_id IN ?", vids)
+		}
+	}
+	if len(customerIDs) > 0 {
+		var cids []int64
+		for _, s := range customerIDs {
+			if cid, err := strconv.ParseInt(s, 10, 64); err == nil {
+				cids = append(cids, cid)
+			}
+		}
+		if len(cids) > 0 {
+			query = query.Where("customer_id IN ?", cids)
+		}
+	}
+	if purchaseNoSearch != "" {
+		query = query.Where("purchase_no ILIKE ?", "%"+purchaseNoSearch+"%")
 	}
 
 	var purchases []models.Purchase
 	query.Preload("Vendor").
+		Preload("Items", func(db *gorm.DB) *gorm.DB {
+			q := db.Where("cancel_flag < 2")
+			if expectedFrom != "" {
+				q = q.Where("expected_date >= ?", expectedFrom)
+			}
+			if expectedTo != "" {
+				q = q.Where("expected_date <= ?", expectedTo)
+			}
+			return q.Order("item_order ASC")
+		}).
 		Preload("Items.Sizes.SizeOption").
 		Preload("Items.Product").
 		Preload("Items.SizeGroup").
@@ -64,12 +104,18 @@ func GetPurchaseOutstanding(c *gin.Context) {
 
 	if len(purchases) == 0 {
 		resp.Success("成功").SetData(map[string]interface{}{
-			"size_groups":  []outstandingSizeGroup{},
-			"max_columns":  0,
-			"rows":         []outstandingRow{},
-			"footer":       map[string]interface{}{"sizes": map[string]int{}, "total_qty": 0, "total_amount": 0},
+			"size_groups": []outstandingSizeGroup{},
+			"max_columns": 0,
+			"rows":        []purchaseOutstandingRow{},
 		}).Send()
 		return
+	}
+
+	modelCodeSet := map[string]bool{}
+	for _, mc := range modelCodes {
+		if mc != "" {
+			modelCodeSet[mc] = true
+		}
 	}
 
 	// 2. 收集所有 PurchaseItem ID
@@ -123,21 +169,15 @@ func GetPurchaseOutstanding(c *gin.Context) {
 	}
 
 	// detail rows
-	type detailEntry struct {
-		purchaseNo    string
-		vendorName    string
-		modelCode     string
-		productName   string
-		sizeGroupCode string
-		purchasePrice float64
-		sizes         map[string]int
-		totalQty      int
-	}
-	var details []detailEntry
+	var rows []purchaseOutstandingRow
 
 	for _, p := range purchases {
+		vendorID := int64(0)
+		vendorCode := ""
 		vendorName := ""
 		if p.Vendor != nil {
+			vendorID = p.Vendor.ID
+			vendorCode = p.Vendor.Code
 			vendorName = p.Vendor.ShortName
 			if vendorName == "" {
 				vendorName = p.Vendor.Name
@@ -150,6 +190,9 @@ func GetPurchaseOutstanding(c *gin.Context) {
 			if item.Product != nil {
 				modelCode = item.Product.ModelCode
 				productName = item.Product.NameSpec
+			}
+			if len(modelCodeSet) > 0 && !modelCodeSet[modelCode] {
+				continue
 			}
 			sizeGroupCode := ""
 			if item.SizeGroup != nil {
@@ -179,15 +222,20 @@ func GetPurchaseOutstanding(c *gin.Context) {
 				continue
 			}
 
-			details = append(details, detailEntry{
-				purchaseNo:    p.PurchaseNo,
-				vendorName:    vendorName,
-				modelCode:     modelCode,
-				productName:   productName,
-				sizeGroupCode: sizeGroupCode,
-				purchasePrice: item.PurchasePrice,
-				sizes:         sizes,
-				totalQty:      itemTotalQty,
+			rows = append(rows, purchaseOutstandingRow{
+				PurchaseID:    p.ID,
+				PurchaseNo:    p.PurchaseNo,
+				PurchaseDate:  p.PurchaseDate,
+				VendorID:      vendorID,
+				VendorCode:    vendorCode,
+				VendorName:    vendorName,
+				ModelCode:     modelCode,
+				ProductName:   productName,
+				ExpectedDate:  item.ExpectedDate,
+				SizeGroupCode: sizeGroupCode,
+				Sizes:         sizes,
+				TotalQty:      itemTotalQty,
+				TotalAmount:   float64(itemTotalQty) * item.PurchasePrice,
 			})
 		}
 	}
@@ -212,97 +260,9 @@ func GetPurchaseOutstanding(c *gin.Context) {
 		}
 	}
 
-	// 6. 組裝 rows
-	var rows []outstandingRow
-
-	if tab == "detail" {
-		for _, d := range details {
-			subLabel := fmt.Sprintf("#%s(%s)", d.vendorName, d.purchaseNo)
-			rows = append(rows, outstandingRow{
-				GroupLabel:    d.modelCode,
-				ProductName:   d.productName,
-				SubLabel:      subLabel,
-				SizeGroupCode: d.sizeGroupCode,
-				Sizes:         d.sizes,
-				TotalQty:      d.totalQty,
-				TotalAmount:   float64(d.totalQty) * d.purchasePrice,
-			})
-		}
-	} else {
-		type aggEntry struct {
-			groupLabel    string
-			productName   string
-			sizeGroupCode string
-			sizes         map[string]int
-			totalQty      int
-			totalAmount   float64
-		}
-		aggMap := map[string]*aggEntry{}
-		var aggOrder []string
-
-		for _, d := range details {
-			var groupKey, productName string
-			switch groupBy {
-			case "vendor":
-				groupKey = d.vendorName
-				productName = ""
-			default:
-				groupKey = d.modelCode
-				productName = d.productName
-			}
-
-			agg, exists := aggMap[groupKey]
-			if !exists {
-				agg = &aggEntry{
-					groupLabel:    groupKey,
-					productName:   productName,
-					sizeGroupCode: d.sizeGroupCode,
-					sizes:         map[string]int{},
-				}
-				aggMap[groupKey] = agg
-				aggOrder = append(aggOrder, groupKey)
-			}
-
-			for sizeKey, qty := range d.sizes {
-				agg.sizes[sizeKey] += qty
-			}
-			agg.totalQty += d.totalQty
-			agg.totalAmount += float64(d.totalQty) * d.purchasePrice
-		}
-
-		for _, key := range aggOrder {
-			agg := aggMap[key]
-			rows = append(rows, outstandingRow{
-				GroupLabel:    agg.groupLabel,
-				ProductName:   agg.productName,
-				SizeGroupCode: agg.sizeGroupCode,
-				Sizes:         agg.sizes,
-				TotalQty:      agg.totalQty,
-				TotalAmount:   agg.totalAmount,
-			})
-		}
-	}
-
-	// 7. footer 加總
-	footerSizes := map[string]int{}
-	footerTotalQty := 0
-	footerTotalAmount := 0.0
-	for _, row := range rows {
-		for sizeKey, qty := range row.Sizes {
-			footerSizes[sizeKey] += qty
-		}
-		footerTotalQty += row.TotalQty
-		footerTotalAmount += row.TotalAmount
-	}
-
 	resp.Success("成功").SetData(map[string]interface{}{
-		"size_groups":  sizeGroups,
-		"max_columns":  maxColumns,
-		"rows":         rows,
-		"footer": map[string]interface{}{
-			"sizes":        footerSizes,
-			"total_qty":    footerTotalQty,
-			"total_amount": footerTotalAmount,
-		},
+		"size_groups": sizeGroups,
+		"max_columns": maxColumns,
+		"rows":        rows,
 	}).Send()
 }

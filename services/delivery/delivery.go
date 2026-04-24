@@ -45,11 +45,26 @@ func UpdateDeliveryStatus(tx *gorm.DB, purchaseID int64) error {
 		SizeOptionID   int64
 		Qty            int
 	}
+
+	// 檢查是否所有明細都已停交（cancel_flag >= 2），若是則視為已交齊
+	var totalItemCount int64
+	if err := tx.Model(&models.PurchaseItem{}).Where("purchase_id = ?", purchaseID).Count(&totalItemCount).Error; err != nil {
+		return err
+	}
+	var stoppedItemCount int64
+	if err := tx.Model(&models.PurchaseItem{}).Where("purchase_id = ? AND cancel_flag >= 2", purchaseID).Count(&stoppedItemCount).Error; err != nil {
+		return err
+	}
+	if totalItemCount > 0 && stoppedItemCount == totalItemCount {
+		return tx.Model(&models.Purchase{}).Where("id = ?", purchaseID).Update("delivery_status", 2).Error
+	}
+
+	// 只計算未停交的明細
 	var purchaseSizes []sizeQty
 	tx.Model(&models.PurchaseItemSize{}).
 		Select("purchase_item_sizes.purchase_item_id, purchase_item_sizes.size_option_id, purchase_item_sizes.qty").
 		Joins("JOIN purchase_items ON purchase_items.id = purchase_item_sizes.purchase_item_id").
-		Where("purchase_items.purchase_id = ?", purchaseID).
+		Where("purchase_items.purchase_id = ? AND purchase_items.cancel_flag < 2", purchaseID).
 		Scan(&purchaseSizes)
 
 	if len(purchaseSizes) == 0 {
