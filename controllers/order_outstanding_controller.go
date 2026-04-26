@@ -49,7 +49,7 @@ func GetOrderOutstanding(c *gin.Context) {
 	dateFrom := c.Query("date_from")
 	dateTo := c.Query("date_to")
 	customerIDs := c.QueryArray("customer_id")
-	modelCodes := c.QueryArray("model_code")
+	modelCodeSearch := c.Query("model_code")
 	brandIDStrs := c.QueryArray("brand_id")
 	expectedFrom := c.Query("expected_from")
 	expectedTo := c.Query("expected_to")
@@ -143,8 +143,8 @@ func GetOrderOutstanding(c *gin.Context) {
 	if len(brandIDs) > 0 {
 		filterQuery = filterQuery.Where("products.brand_id IN ?", brandIDs)
 	}
-	if len(modelCodes) > 0 {
-		filterQuery = filterQuery.Where("products.model_code IN ?", modelCodes)
+	if modelCodeSearch != "" {
+		filterQuery = filterQuery.Where("products.model_code ILIKE ?", "%"+modelCodeSearch+"%")
 	}
 	if expectedFrom != "" {
 		filterQuery = filterQuery.Where("order_items.expected_date >= ?", expectedFrom)
