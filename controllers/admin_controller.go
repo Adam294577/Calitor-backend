@@ -610,9 +610,12 @@ func GetMenuSettingsTree(c *gin.Context) {
 	defer db.Close()
 
 	var permissions []models.Permission
-	db.GetRead().Where("parent_id IS NULL").Order("sort ASC").
+	db.GetRead().
+		Where("parent_id IS NULL").
+		Where("kind = ?", "page").
+		Order("sort ASC").
 		Preload("Children", func(db *gorm.DB) *gorm.DB {
-			return db.Order("sort ASC")
+			return db.Where("kind = ?", "page").Order("sort ASC")
 		}).
 		Find(&permissions)
 
@@ -672,6 +675,13 @@ func UpdateMenuSettings(c *gin.Context) {
 	if len(dbPerms) != len(req.Items) {
 		resp.Fail(http.StatusBadRequest, "包含不存在的權限項目").Send()
 		return
+	}
+	// 僅可變更 kind=page 的選單項；func 類（如 edit-master-code、CRUD 葉子）一律拒絕
+	for _, p := range dbPerms {
+		if p.Kind != "page" {
+			resp.Fail(http.StatusBadRequest, "禁止變更非選單項目").Send()
+			return
+		}
 	}
 	dbById := map[int64]models.Permission{}
 	for _, p := range dbPerms {

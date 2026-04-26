@@ -6,6 +6,13 @@ import (
 )
 
 // Permission 權限
+//
+// Kind 區分權限項目用途：
+//   - "page": 對應到側邊欄選單／實際頁面（會出現在「選單設定」可被使用者拖曳/改名）
+//   - "func": 純功能權限旗標，不是頁面。包含所有 CRUD 葉子（如 customers.view）
+//     以及跨選單共享的旗標（如 edit-master-code）
+//
+// 由 backfillPermissionKind 依 key 規則自動分類，不開放使用者改。
 type Permission struct {
 	ID           int64        `gorm:"primaryKey" json:"id"`
 	CreatedAt    time.Time    `json:"created_at"`
@@ -14,6 +21,7 @@ type Permission struct {
 	Key          string       `gorm:"type:varchar(100);uniqueIndex;not null" json:"key"`
 	Name         string       `gorm:"type:varchar(100);not null" json:"name"`
 	Sort         int          `gorm:"default:0" json:"sort"`
+	Kind         string       `gorm:"type:varchar(10);default:'page';not null;index" json:"kind"`
 	IsCustomized bool         `gorm:"default:false" json:"is_customized"` // 為 true 時，seed 不再覆蓋 name/sort（使用者已透過「選單設定」自訂）
 	Children     []Permission `gorm:"foreignKey:ParentId" json:"children,omitempty"`
 }
@@ -165,6 +173,9 @@ func SeedPermissionsAndRoles(db *DBManager) {
 
 	// === 呼叫主檔/輔助資料權限 seed ===
 	SeedMasterDataPermissions(db)
+
+	// === 結構性欄位：依 key 規則回填 kind（page / func）===
+	backfillPermissionKind(db)
 
 	// === 預設角色 admin，綁定所有葉子權限 ===
 	role := Role{Name: "admin"}
@@ -505,4 +516,20 @@ func updateSeedIfNotCustomized(db *DBManager, p Permission) {
 		Updates(map[string]interface{}{
 			"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId,
 		})
+}
+
+// backfillPermissionKind 根據 key 規則覆寫所有權限的 kind 欄位。
+// 規則：
+//   - func: edit-master-code 與所有 CRUD 葉子（key 含 "."）
+//   - page: 其餘為側邊欄選單分類/頁面
+//
+// kind 為結構性欄位（不開放使用者改），故每次 seed 都無條件覆寫，確保正確。
+func backfillPermissionKind(db *DBManager) {
+	db.GetWrite().Exec(`
+		UPDATE permissions
+		SET kind = CASE
+			WHEN key = 'edit-master-code' OR key LIKE '%.%' THEN 'func'
+			ELSE 'page'
+		END
+	`)
 }
