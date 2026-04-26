@@ -51,6 +51,35 @@ func GetGathers(c *gin.Context) {
 
 	paged, total := Paginate(c, query, &models.Gather{})
 	paged.Find(&items)
+
+	// 折讓金額/其他扣額一律從 gather_details 聚合,主檔欄位可能 stale
+	if len(items) > 0 {
+		ids := make([]int64, len(items))
+		for i, g := range items {
+			ids[i] = g.ID
+		}
+		type aggRow struct {
+			GatherID      int64   `json:"gather_id"`
+			TotalDiscount float64 `json:"total_discount"`
+			TotalOther    float64 `json:"total_other"`
+		}
+		var aggs []aggRow
+		db.GetRead().Table("gather_details").
+			Select("gather_id, COALESCE(SUM(discount_amount), 0) as total_discount, COALESCE(SUM(other_deduct), 0) as total_other").
+			Where("gather_id IN (?)", ids).
+			Group("gather_id").
+			Scan(&aggs)
+		aggMap := map[int64]aggRow{}
+		for _, a := range aggs {
+			aggMap[a.GatherID] = a
+		}
+		for i := range items {
+			a := aggMap[items[i].ID]
+			items[i].DiscountAmount = a.TotalDiscount
+			items[i].OtherDeduct = a.TotalOther
+		}
+	}
+
 	resp.Success("成功").SetData(items).SetTotal(total).Send()
 }
 
