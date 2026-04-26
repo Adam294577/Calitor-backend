@@ -388,3 +388,56 @@ func DeleteProduct(c *gin.Context) {
 	invalidateListCache("products")
 	resp.Success("刪除成功").Send()
 }
+
+// GetProductStocksBatch 批次查詢多商品在指定庫點/客戶的 size_stocks。
+// 給 SizeQtyTable 切換 customer/store 時刷新已選明細的庫存量,避免 N 次 searchProducts 並行打 API。
+// Body: { product_ids: int64[], customer_id?: int64, store_code?: string }
+// Response: { stocks: { "<product_id>": [ProductSizeStock, ...] } }
+func GetProductStocksBatch(c *gin.Context) {
+	resp := response.New(c)
+
+	var req struct {
+		ProductIDs []int64 `json:"product_ids" binding:"required"`
+		CustomerID int64   `json:"customer_id"`
+		StoreCode  string  `json:"store_code"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
+		return
+	}
+	if len(req.ProductIDs) == 0 {
+		resp.Success("成功").SetData(map[string]interface{}{
+			"stocks": map[string][]models.ProductSizeStock{},
+		}).Send()
+		return
+	}
+	if req.CustomerID == 0 && req.StoreCode == "" {
+		resp.Fail(http.StatusBadRequest, "需指定 customer_id 或 store_code").Send()
+		return
+	}
+
+	db := models.PostgresNew()
+	defer db.Close()
+
+	var stocks []models.ProductSizeStock
+	q := db.GetRead().Where("product_id IN ?", req.ProductIDs)
+	if req.StoreCode != "" {
+		q = q.Where("customer_id IN (SELECT id FROM retail_customers WHERE branch_code = ?)", req.StoreCode)
+	} else {
+		q = q.Where("customer_id = ?", req.CustomerID)
+	}
+	if err := q.Find(&stocks).Error; err != nil {
+		resp.Panic(err).Send()
+		return
+	}
+
+	stockMap := map[string][]models.ProductSizeStock{}
+	for _, s := range stocks {
+		key := strconv.FormatInt(s.ProductID, 10)
+		stockMap[key] = append(stockMap[key], s)
+	}
+
+	resp.Success("成功").SetData(map[string]interface{}{
+		"stocks": stockMap,
+	}).Send()
+}

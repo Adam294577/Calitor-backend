@@ -172,6 +172,9 @@ func RouterRegister(route *gin.Engine) {
 		// 商品搜尋（供採購單、訂貨單等作業用）
 		adminAuth.GET("/products/search", controllers.SearchProducts)
 
+		// 批次查詢多商品在指定庫點/客戶的 size_stocks（給 SizeQtyTable 切換 customer/store 時批次刷新）
+		adminAuth.POST("/products/stocks-batch", controllers.GetProductStocksBatch)
+
 		// 日常作業 - 採購未交統計
 		adminAuth.GET("/purchases/outstanding", middlewares.RequirePermission("purchase-outstanding.view"), controllers.GetPurchaseOutstanding)
 
