@@ -140,6 +140,10 @@ func CreateBatch(tx *gorm.DB, payload CreateBatchPayload, recorderID int64) ([]C
 			vendorName = vendor.Name
 		}
 
+		inputMode := sh.InputMode
+		if inputMode == 0 {
+			inputMode = models.StockInputModeBarcode // 批次建單預設為條碼模式
+		}
 		s := models.Stock{
 			StockNo:         stockNo,
 			StockDate:       sh.StockDate,
@@ -155,6 +159,7 @@ func CreateBatch(tx *gorm.DB, payload CreateBatchPayload, recorderID int64) ([]C
 			TaxMode:         sh.TaxMode,
 			TaxRate:         sh.TaxRate,
 			DiscountPercent: sh.DiscountPercent,
+			InputMode:       inputMode,
 		}
 		if err := tx.Create(&s).Error; err != nil {
 			return nil, fmt.Errorf("第 %d 張:建立失敗 %v", idx+1, err)

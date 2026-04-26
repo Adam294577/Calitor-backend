@@ -164,6 +164,7 @@ func CreateStock(c *gin.Context) {
 		InvoiceNo       string  `json:"invoice_no"`
 		InvoiceAmount   float64 `json:"invoice_amount"`
 		ChargeAmount    float64 `json:"charge_amount"`
+		InputMode       int     `json:"input_mode"`
 		Items           []struct {
 			ProductID      int64   `json:"product_id"`
 			SizeGroupID    *int64  `json:"size_group_id"`
@@ -246,6 +247,10 @@ func CreateStock(c *gin.Context) {
 		recorderID = int64(id)
 	}
 
+	inputMode := req.InputMode
+	if inputMode == 0 {
+		inputMode = models.StockInputModeKeyboard // 此 endpoint 為鍵盤輸入路徑
+	}
 	stock := models.Stock{
 		StockNo:         stockNo,
 		StockDate:       req.StockDate,
@@ -268,6 +273,7 @@ func CreateStock(c *gin.Context) {
 		InvoiceNo:       req.InvoiceNo,
 		InvoiceAmount:   req.InvoiceAmount,
 		ChargeAmount:    req.ChargeAmount,
+		InputMode:       inputMode,
 	}
 
 	err := db.GetWrite().Transaction(func(tx *gorm.DB) error {

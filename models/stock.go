@@ -6,6 +6,12 @@ import (
 	"gorm.io/gorm"
 )
 
+// Stock InputMode 來源
+const (
+	StockInputModeKeyboard = 1 // 鍵盤輸入(controllers.CreateStock 單筆 endpoint 預設)
+	StockInputModeBarcode  = 2 // 條碼掃描(services/stock.CreateBatch 批次建單預設)
+)
+
 // Stock 進貨主表
 type Stock struct {
 	ID              int64           `gorm:"primaryKey" json:"id"`
@@ -38,6 +44,7 @@ type Stock struct {
 	InvoiceNo       string          `gorm:"type:varchar(50)" json:"invoice_no"`
 	InvoiceAmount   float64         `gorm:"type:numeric(18,2);default:0" json:"invoice_amount"`
 	ChargeAmount    float64         `gorm:"type:numeric(18,2);default:0" json:"charge_amount"`
+	InputMode       int             `gorm:"type:integer;default:1" json:"input_mode"` // 1=鍵盤 2=掃描器
 	Items           []StockItem     `gorm:"foreignKey:StockID" json:"items,omitempty"`
 }
 
