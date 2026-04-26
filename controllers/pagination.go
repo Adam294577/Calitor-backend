@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"project/services/log"
 	"strconv"
 	"strings"
 
@@ -26,8 +27,12 @@ func Paginate(c *gin.Context, query *gorm.DB, model interface{}) (*gorm.DB, int6
 		pageSize = maxPageSize
 	}
 
+	// Count: override Select 為 "*"，避免 query 帶有 Select("table.*") 時 GORM 自動產生
+	// SELECT COUNT(table.*) 在 PostgreSQL + JOIN 結合下回 0 的問題。
 	var total int64
-	query.Session(&gorm.Session{}).Model(model).Count(&total)
+	if err := query.Session(&gorm.Session{}).Select("*").Model(model).Count(&total).Error; err != nil {
+		log.Error("[Paginate] count error: %v", err)
+	}
 
 	offset := (page - 1) * pageSize
 	return query.Offset(offset).Limit(pageSize), total

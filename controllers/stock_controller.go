@@ -27,7 +27,7 @@ func GetStocks(c *gin.Context) {
 		Preload("FillPerson").
 		Preload("Recorder").
 		Preload("Purchase").
-		Order("stock_date DESC, id DESC")
+		Order("stock_date DESC, stock_no DESC")
 
 	// 進貨單號搜尋
 	if v := c.Query("search"); v != "" {

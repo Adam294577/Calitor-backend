@@ -29,7 +29,7 @@ func GetShipments(c *gin.Context) {
 		Preload("Customer").
 		Preload("FillPerson").
 		Preload("Recorder").
-		Order("shipments.shipment_date DESC, shipments.id DESC")
+		Order("shipments.shipment_date DESC, shipments.shipment_no DESC")
 
 	if v := c.Query("search"); v != "" {
 		query = ApplySearch(query, v, "shipment_no")

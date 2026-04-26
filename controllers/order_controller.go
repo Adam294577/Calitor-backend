@@ -511,7 +511,7 @@ func SearchOrders(c *gin.Context) {
 			return db.Order("sort_order ASC")
 		}).
 		Preload("Items.Sizes.SizeOption").
-		Order("order_date DESC, id DESC")
+		Order("order_date DESC, order_no DESC")
 
 	if v := c.Query("customer_id"); v != "" {
 		query = query.Where("customer_id = ?", v)

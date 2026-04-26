@@ -248,6 +248,9 @@ func GetOrderOutstanding(c *gin.Context) {
 			continue
 		}
 
+		// order_price 一律為未稅，含稅合計需依稅率加稅（含稅/應稅模式皆然）
+		amount := math.Round(float64(totalQty) * item.OrderPrice * (1 + order.TaxRate/100))
+
 		sortable = append(sortable, rowWithMeta{
 			row: orderOutstandingRow{
 				OrderID:       item.OrderID,
@@ -261,7 +264,7 @@ func GetOrderOutstanding(c *gin.Context) {
 				SizeGroupCode: sizeGroupCode,
 				Sizes:         sizes,
 				TotalQty:      totalQty,
-				TotalAmount:   math.Round(float64(totalQty) * item.OrderPrice),
+				TotalAmount:   amount,
 			},
 			createdOn: productCreatedOn,
 		})
