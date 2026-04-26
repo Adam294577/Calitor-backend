@@ -240,34 +240,63 @@ func ParseAndAllocate(db *gorm.DB, customerID int64, entries []Entry) (*ParseAnd
 		}
 	}
 
-	allocated := map[string]int{}
+	// 先把同 (product_id, size_option_id) 的多筆 entry 合計,避免各自獨立分配導致重複扣同一個 PO
+	type aggKey struct {
+		ProductID    int64
+		SizeOptionID int64
+	}
+	type aggItem struct {
+		Key      aggKey
+		TotalQty int
+		Sample   parsedItem // 取第一筆的 barcode / model_code / size_label 等描述
+	}
+	aggMap := map[aggKey]*aggItem{}
+	var aggOrder []aggKey
+	for _, p := range validParsed {
+		prod := productMap[p.ModelCode]
+		k := aggKey{ProductID: prod.ID, SizeOptionID: p.SizeOptionID}
+		if a, ok := aggMap[k]; ok {
+			a.TotalQty += p.Qty
+		} else {
+			aggMap[k] = &aggItem{Key: k, TotalQty: p.Qty, Sample: p}
+			aggOrder = append(aggOrder, k)
+		}
+	}
+
 	var vendorGroupItems []ResultItem
 	var noVendorItems []ResultItem
 	seq := 0
 
-	for _, p := range validParsed {
+	emitNoVendor := func(sample parsedItem, prodID int64, prodName string, qty int) {
+		seq++
+		noVendorItems = append(noVendorItems, ResultItem{
+			RowKey:        fmt.Sprintf("nv-%d-%d-%d", prodID, sample.SizeOptionID, seq),
+			Barcode:       sample.Barcode,
+			ModelCode:     sample.ModelCode,
+			ProductID:     prodID,
+			ProductName:   prodName,
+			SizeGroupID:   sample.SizeGroupID,
+			SizeGroupCode: sample.SizeGroupCode,
+			SizeOptionID:  sample.SizeOptionID,
+			SizeLabel:     sample.SizeLabel,
+			Qty:           qty,
+			Status:        "ok",
+		})
+	}
+
+	for _, k := range aggOrder {
+		a := aggMap[k]
+		p := a.Sample
 		prod := productMap[p.ModelCode]
 		mapKey := fmt.Sprintf("%d-%d", prod.ID, p.SizeOptionID)
 		cands := candidateMap[mapKey]
 
 		if len(cands) == 0 {
-			seq++
-			noVendorItems = append(noVendorItems, ResultItem{
-				RowKey:        fmt.Sprintf("nv-%d-%d-%d", prod.ID, p.SizeOptionID, seq),
-				Barcode:       p.Barcode,
-				ModelCode:     p.ModelCode,
-				ProductID:     prod.ID,
-				ProductName:   prod.NameSpec,
-				SizeGroupID:   p.SizeGroupID,
-				SizeGroupCode: p.SizeGroupCode,
-				SizeOptionID:  p.SizeOptionID,
-				SizeLabel:     p.SizeLabel,
-				Qty:           p.Qty,
-				Status:        "ok",
-			})
+			emitNoVendor(p, prod.ID, prod.NameSpec, a.TotalQty)
 			continue
 		}
 
+		// 預設廠商 = 最早 FIFO candidate 的 vendor;只在該 vendor 的所有 PO 內 FIFO 扣
 		defaultVendorID := cands[0].VendorID
 		vendorCands := make([]candidate, 0, len(cands))
 		for _, c := range cands {
@@ -276,16 +305,13 @@ func ParseAndAllocate(db *gorm.DB, customerID int64, entries []Entry) (*ParseAnd
 			}
 		}
 
-		remaining := p.Qty
-		var lastCand *candidate
+		remaining := a.TotalQty
 		for i := range vendorCands {
 			if remaining <= 0 {
 				break
 			}
 			cand := vendorCands[i]
-			allocKey := fmt.Sprintf("%d-%d", cand.PurchaseItemID, cand.SizeOptionID)
-			used := allocated[allocKey]
-			avail := cand.Outstanding - used
+			avail := cand.Outstanding
 			if avail <= 0 {
 				continue
 			}
@@ -293,7 +319,6 @@ func ParseAndAllocate(db *gorm.DB, customerID int64, entries []Entry) (*ParseAnd
 			if take > avail {
 				take = avail
 			}
-			allocated[allocKey] += take
 			remaining -= take
 
 			seq++
@@ -324,38 +349,11 @@ func ParseAndAllocate(db *gorm.DB, customerID int64, entries []Entry) (*ParseAnd
 				Supplement:     cand.Supplement,
 				Status:         "ok",
 			})
-			lastCand = &vendorCands[i]
 		}
 
-		if remaining > 0 && lastCand != nil {
-			seq++
-			outstandingCopy := lastCand.Outstanding
-			pid := lastCand.PurchaseID
-			piid := lastCand.PurchaseItemID
-			vendorGroupItems = append(vendorGroupItems, ResultItem{
-				RowKey:         fmt.Sprintf("v%d-pi%d-s%d-%d", lastCand.VendorID, lastCand.PurchaseItemID, lastCand.SizeOptionID, seq),
-				Barcode:        p.Barcode,
-				ModelCode:      p.ModelCode,
-				ProductID:      prod.ID,
-				ProductName:    prod.NameSpec,
-				SizeGroupID:    lastCand.SizeGroupID,
-				SizeGroupCode:  p.SizeGroupCode,
-				SizeOptionID:   lastCand.SizeOptionID,
-				SizeLabel:      p.SizeLabel,
-				Qty:            remaining,
-				PurchaseItemID: &piid,
-				PurchaseID:     &pid,
-				PurchaseNo:     lastCand.PurchaseNo,
-				PurchaseDate:   lastCand.PurchaseDate,
-				CurrencyCode:   lastCand.CurrencyCode,
-				OutstandingQty: &outstandingCopy,
-				AdvicePrice:    lastCand.AdvicePrice,
-				Discount:       lastCand.Discount,
-				PurchasePrice:  lastCand.PurchasePrice,
-				NonTaxPrice:    lastCand.NonTaxPrice,
-				Supplement:     lastCand.Supplement,
-				Status:         "warning",
-			})
+		// 該廠商所有 PO 的 outstanding 都吃完還有剩 → 進「無廠商」
+		if remaining > 0 {
+			emitNoVendor(p, prod.ID, prod.NameSpec, remaining)
 		}
 	}
 
