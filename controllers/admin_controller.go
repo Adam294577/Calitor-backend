@@ -602,6 +602,152 @@ func GetPermissionTree(c *gin.Context) {
 	resp.Success("成功").SetData(permissions).Send()
 }
 
+// GetMenuSettingsTree 取得「選單設定」用的樹（只含第 1、2 層，不含 CRUD 葉子）
+func GetMenuSettingsTree(c *gin.Context) {
+	resp := response.New(c)
+
+	db := models.PostgresNew()
+	defer db.Close()
+
+	var permissions []models.Permission
+	db.GetRead().Where("parent_id IS NULL").Order("sort ASC").
+		Preload("Children", func(db *gorm.DB) *gorm.DB {
+			return db.Order("sort ASC")
+		}).
+		Find(&permissions)
+
+	// 清空 children 內可能殘留的 Children 欄位（雖然沒 preload 第 3 層，
+	// 但確保 JSON 不出現 children: null vs []，前端統一處理）
+	for i := range permissions {
+		for j := range permissions[i].Children {
+			permissions[i].Children[j].Children = nil
+		}
+	}
+
+	resp.Success("成功").SetData(permissions).Send()
+}
+
+// menuSettingsItem 單一更新項目
+type menuSettingsItem struct {
+	ID       int64  `json:"id" binding:"required"`
+	Name     string `json:"name" binding:"required"`
+	Sort     int    `json:"sort"`
+	ParentId *int64 `json:"parent_id"`
+}
+
+// updateMenuSettingsRequest 更新請求
+type updateMenuSettingsRequest struct {
+	Items []menuSettingsItem `json:"items" binding:"required"`
+}
+
+// UpdateMenuSettings 更新選單設定（僅可改第 1、2 層的 name 與 sort，不允許跨父層搬家）
+func UpdateMenuSettings(c *gin.Context) {
+	resp := response.New(c)
+
+	db := models.PostgresNew()
+	defer db.Close()
+
+	var req updateMenuSettingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
+		return
+	}
+	if len(req.Items) == 0 {
+		resp.Fail(http.StatusBadRequest, "無更新項目").Send()
+		return
+	}
+
+	// 一次撈出所有目標 row 與其父層，做嚴格驗證
+	ids := make([]int64, 0, len(req.Items))
+	for _, item := range req.Items {
+		if len(item.Name) == 0 || len(item.Name) > 100 {
+			resp.Fail(http.StatusBadRequest, "名稱長度需介於 1~100").Send()
+			return
+		}
+		ids = append(ids, item.ID)
+	}
+
+	var dbPerms []models.Permission
+	db.GetRead().Where("id IN ?", ids).Find(&dbPerms)
+	if len(dbPerms) != len(req.Items) {
+		resp.Fail(http.StatusBadRequest, "包含不存在的權限項目").Send()
+		return
+	}
+	dbById := map[int64]models.Permission{}
+	for _, p := range dbPerms {
+		dbById[p.ID] = p
+	}
+
+	// 驗證每筆都屬於第 1 層或第 2 層；且 parent_id 未變更
+	// 第 1 層：ParentId IS NULL
+	// 第 2 層：其 ParentId 對應的 Permission 自己的 ParentId 為 NULL
+	parentIds := map[int64]bool{}
+	for _, p := range dbPerms {
+		if p.ParentId != nil {
+			parentIds[*p.ParentId] = true
+		}
+	}
+	parentIdList := make([]int64, 0, len(parentIds))
+	for id := range parentIds {
+		parentIdList = append(parentIdList, id)
+	}
+	var parentRows []models.Permission
+	if len(parentIdList) > 0 {
+		db.GetRead().Where("id IN ?", parentIdList).Find(&parentRows)
+	}
+	parentById := map[int64]models.Permission{}
+	for _, p := range parentRows {
+		parentById[p.ID] = p
+	}
+
+	for _, item := range req.Items {
+		dbRow := dbById[item.ID]
+
+		// parent_id 不可變更
+		reqParent := item.ParentId
+		dbParent := dbRow.ParentId
+		if (reqParent == nil) != (dbParent == nil) ||
+			(reqParent != nil && dbParent != nil && *reqParent != *dbParent) {
+			resp.Fail(http.StatusBadRequest, "禁止變更父層歸屬").Send()
+			return
+		}
+
+		// 必須為第 1 層或第 2 層
+		if dbRow.ParentId == nil {
+			// 第 1 層 OK
+			continue
+		}
+		parent, ok := parentById[*dbRow.ParentId]
+		if !ok || parent.ParentId != nil {
+			// 父層不在或父層自己又有父 → 表示該 row 是第 3 層或更深
+			resp.Fail(http.StatusBadRequest, "僅可更新第 1、2 層選單").Send()
+			return
+		}
+	}
+
+	// 通過驗證，逐筆更新（包在交易內）
+	err := db.GetWrite().Transaction(func(tx *gorm.DB) error {
+		for _, item := range req.Items {
+			if err := tx.Model(&models.Permission{}).
+				Where("id = ?", item.ID).
+				Updates(map[string]interface{}{
+					"name":          item.Name,
+					"sort":          item.Sort,
+					"is_customized": true,
+				}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		resp.Panic(err).Send()
+		return
+	}
+
+	resp.Success("更新成功").Send()
+}
+
 // createRoleRequest 新增角色請求
 type createRoleRequest struct {
 	Name string `json:"name" binding:"required"`
