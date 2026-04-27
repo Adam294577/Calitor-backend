@@ -365,7 +365,7 @@ func CreateShipment(c *gin.Context) {
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
 			}
-			totalAmount := float64(totalQty) * reqItem.ShipPrice
+			totalAmount := math.Round(float64(totalQty) * reqItem.ShipPrice)
 
 			item := models.ShipmentItem{
 				ShipmentID:  shipment.ID,
@@ -634,7 +634,7 @@ func UpdateShipment(c *gin.Context) {
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
 			}
-			totalAmount := float64(totalQty) * reqItem.ShipPrice
+			totalAmount := math.Round(float64(totalQty) * reqItem.ShipPrice)
 
 			item := models.ShipmentItem{
 				ShipmentID:  id,

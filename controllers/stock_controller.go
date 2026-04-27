@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"project/models"
 	"project/services/delivery"
@@ -285,7 +286,7 @@ func CreateStock(c *gin.Context) {
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
 			}
-			totalAmount := float64(totalQty) * reqItem.PurchasePrice
+			totalAmount := math.Round(float64(totalQty) * reqItem.PurchasePrice)
 
 			item := models.StockItem{
 				StockID:        stock.ID,
@@ -514,7 +515,7 @@ func UpdateStock(c *gin.Context) {
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
 			}
-			totalAmount := float64(totalQty) * reqItem.PurchasePrice
+			totalAmount := math.Round(float64(totalQty) * reqItem.PurchasePrice)
 
 			item := models.StockItem{
 				StockID:        id,

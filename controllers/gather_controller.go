@@ -151,7 +151,7 @@ func GetPrepaidCredit(c *gin.Context) {
 		Select("COALESCE(SUM(prepaid_credit_used), 0)").Scan(&totalUsed)
 
 	// 累入預收貸款 = 實收 - 已沖銷 - 已取用（即多繳的錢扣掉已取用部分）
-	balance := math.Round((totalReceived-totalApplied-totalUsed)*100) / 100
+	balance := math.Round(totalReceived - totalApplied - totalUsed)
 	if balance < 0 {
 		balance = 0
 	}
@@ -241,7 +241,7 @@ func GetUnclearedShipments(c *gin.Context) {
 		if excludeGatherID > 0 {
 			effectiveCharge = agg.TotalWriteOff
 		}
-		uncleared := math.Round((s.DealAmount-effectiveCharge-agg.TotalDiscount-agg.TotalOther)*100) / 100
+		uncleared := math.Round(s.DealAmount - effectiveCharge - agg.TotalDiscount - agg.TotalOther)
 		if uncleared == 0 {
 			continue
 		}

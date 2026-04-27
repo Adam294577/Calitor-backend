@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"project/models"
 	"project/services/inventory"
@@ -193,7 +194,7 @@ func CreateTransfer(c *gin.Context) {
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
 			}
-			totalAmount := float64(totalQty) * reqItem.UnitPrice
+			totalAmount := math.Round(float64(totalQty) * reqItem.UnitPrice)
 
 			item := models.TransferItem{
 				TransferID:     transfer.ID,
@@ -409,7 +410,7 @@ func UpdateTransfer(c *gin.Context) {
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
 			}
-			totalAmount := float64(totalQty) * reqItem.UnitPrice
+			totalAmount := math.Round(float64(totalQty) * reqItem.UnitPrice)
 
 			item := models.TransferItem{
 				TransferID:     id,

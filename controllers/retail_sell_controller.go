@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"project/models"
 	"project/services/inventory"
@@ -250,9 +251,9 @@ func CreateRetailSell(c *gin.Context) {
 			// 計算金額：折扣為折數（如 85 表示 85 折），0 表示不打折
 			unitPrice := reqItem.SellPrice
 			if reqItem.Discount > 0 && reqItem.Discount < 100 {
-				unitPrice = reqItem.SellPrice * reqItem.Discount / 100
+				unitPrice = math.Round(reqItem.SellPrice * reqItem.Discount / 100)
 			}
-			totalAmount := float64(totalQty) * unitPrice
+			totalAmount := math.Round(float64(totalQty) * unitPrice)
 
 			// 贈品金額為 0
 			if sellMode == 7 {
@@ -485,9 +486,9 @@ func UpdateRetailSell(c *gin.Context) {
 
 			unitPrice := reqItem.SellPrice
 			if reqItem.Discount > 0 && reqItem.Discount < 100 {
-				unitPrice = reqItem.SellPrice * reqItem.Discount / 100
+				unitPrice = math.Round(reqItem.SellPrice * reqItem.Discount / 100)
 			}
-			totalAmount := float64(totalQty) * unitPrice
+			totalAmount := math.Round(float64(totalQty) * unitPrice)
 			if sellMode == 7 {
 				totalAmount = 0
 			}

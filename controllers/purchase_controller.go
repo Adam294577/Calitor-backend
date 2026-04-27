@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"project/models"
 	"project/services/delivery"
@@ -231,7 +232,7 @@ func CreatePurchase(c *gin.Context) {
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
 			}
-			totalAmount := float64(totalQty) * reqItem.PurchasePrice
+			totalAmount := math.Round(float64(totalQty) * reqItem.PurchasePrice)
 
 			cancelFlag := reqItem.CancelFlag
 			if cancelFlag == 0 {
@@ -368,7 +369,7 @@ func UpdatePurchase(c *gin.Context) {
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
 			}
-			totalAmount := float64(totalQty) * reqItem.PurchasePrice
+			totalAmount := math.Round(float64(totalQty) * reqItem.PurchasePrice)
 
 			cancelFlag := reqItem.CancelFlag
 			if cancelFlag <= 0 {
