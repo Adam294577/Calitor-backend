@@ -259,6 +259,7 @@ func RouterRegister(route *gin.Engine) {
 
 		// 帳款管理 - 應收帳款查詢
 		adminAuth.GET("/receivables", middlewares.RequirePermission("receivable-query.view"), controllers.GetReceivables)
+		adminAuth.GET("/receivables/customers", middlewares.RequirePermission("receivable-query.view"), controllers.GetReceivableCustomers)
 
 		// 帳款管理 - 應收帳齡分析表
 		adminAuth.GET("/receivables/aging", middlewares.RequirePermission("receivable-aging.view"), controllers.GetReceivableAging)
