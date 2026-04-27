@@ -52,7 +52,7 @@ func GetProductCategoriesByLevel(c *gin.Context) {
 	defer db.Close()
 
 	model, items, _ := categoryModelByLevel(level)
-	query := db.GetRead().Model(model).Order("id ASC")
+	query := db.GetRead().Model(model).Order("code ASC")
 	query = ApplySearch(query, c.Query("search"), "code", "name")
 	paged, total := Paginate(c, query, model)
 	paged.Find(items)
