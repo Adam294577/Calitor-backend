@@ -11,6 +11,7 @@ import (
 	"project/middlewares"
 	"project/models"
 	"project/routes"
+	"project/services/firewall"
 	"project/services/log"
 	"project/services/redis"
 	response "project/services/responses"
@@ -143,6 +144,11 @@ func App(HttpServer *gin.Engine) {
 	} else {
 		fmt.Println("⚠ MinIO 檔案儲存功能未啟用")
 	}
+
+	// 清除 firewall 白名單的 Redis 殘留快取:redeploy 後若 Redis 仍持有上次部屬的 snapshot,
+	// 新加入 env 的合法 IP 會被舊 cache 擋下最多 5 分鐘 (cacheTTL)。SyncEnvFirewallIPs 已寫入 DB,
+	// 這裡確保下次 Load() 必定 cache miss → 重新從 DB 取得最新白名單。
+	firewall.Invalidate()
 
 	// 啟動Gin服務
 	HttpServer = gin.Default()
