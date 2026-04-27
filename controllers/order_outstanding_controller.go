@@ -270,22 +270,13 @@ func GetOrderOutstanding(c *gin.Context) {
 		})
 	}
 
-	// 7. 排序：對帳品牌 asc → 商品型號建檔日 asc（nil 排最後），同鍵以型號穩定化
+	// 7. 排序：對帳品牌 asc → 同品牌內商品型號 natural sort
 	sort.SliceStable(sortable, func(i, j int) bool {
 		bi, bj := sortable[i].row.BrandName, sortable[j].row.BrandName
 		if bi != bj {
 			return bi < bj
 		}
-		ci, cj := sortable[i].createdOn, sortable[j].createdOn
-		switch {
-		case ci != nil && cj == nil:
-			return true
-		case ci == nil && cj != nil:
-			return false
-		case ci != nil && cj != nil && !ci.Equal(*cj):
-			return ci.Before(*cj)
-		}
-		return sortable[i].row.ModelCode < sortable[j].row.ModelCode
+		return ModelCodeNaturalLess(sortable[i].row.ModelCode, sortable[j].row.ModelCode)
 	})
 
 	rows := make([]orderOutstandingRow, 0, len(sortable))

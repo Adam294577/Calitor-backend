@@ -234,7 +234,12 @@ func GetPurchaseOutstanding(c *gin.Context) {
 		}
 	}
 
-	// 5. 建立 size_groups + max_columns
+	// 5. rows 依 model_code natural sort（前綴字母 → 首段數字 → 中段字母 → 尾段數字）
+	sort.SliceStable(rows, func(i, j int) bool {
+		return ModelCodeNaturalLess(rows[i].ModelCode, rows[j].ModelCode)
+	})
+
+	// 6. 建立 size_groups + max_columns
 	sizeGroups := make([]outstandingSizeGroup, 0, len(allSizeGroupMap))
 	maxColumns := 0
 	sgCodes := make([]string, 0, len(allSizeGroupMap))

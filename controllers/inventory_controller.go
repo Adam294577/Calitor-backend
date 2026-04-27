@@ -135,8 +135,8 @@ LEFT JOIN product_vendors pv ON pv.product_id = p.id AND pv.is_primary = true
 LEFT JOIN retail_customers rc ON rc.id = pss.customer_id
 LEFT JOIN product_brands pb ON pb.id = p.product_brand_id
 %s AND pss.qty != 0
-ORDER BY p.model_code, pss.customer_id, so.sort_order
-`, where)
+ORDER BY %s, pss.customer_id, so.sort_order
+`, where, ModelCodeOrderBy("p.model_code"))
 
 	var rawRows []inventoryRawRow
 	if err := db.GetRead().Raw(sql, args...).Scan(&rawRows).Error; err != nil {

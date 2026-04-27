@@ -277,7 +277,13 @@ func GetStockSummary(c *gin.Context) {
 			per.TotalAmount = per.NetAmount + per.TaxAmount
 			accumulateStockRow(&e.row, &per)
 		}
-		sort.Strings(order)
+		if groupBy == "vendor" {
+			sort.Strings(order)
+		} else {
+			sort.Slice(order, func(i, j int) bool {
+				return ModelCodeNaturalLess(order[i], order[j])
+			})
+		}
 		for _, k := range order {
 			e := aggMap[k]
 			if groupBy == "vendor" {

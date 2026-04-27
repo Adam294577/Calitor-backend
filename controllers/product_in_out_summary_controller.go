@@ -100,9 +100,8 @@ LEFT JOIN size_groups sg ON sg.id = p.size1_group_id
 LEFT JOIN product_vendors pv ON pv.product_id = p.id AND pv.is_primary = true
 LEFT JOIN vendors v ON v.id = pv.vendor_id
 %s
-ORDER BY p.created_on DESC NULLS LAST, p.model_code
-LIMIT 500
-`, where)
+ORDER BY %s
+`, where, ModelCodeOrderBy("p.model_code"))
 
 	var rows []productSummaryRow
 	if err := db.GetRead().Raw(sql, args...).Scan(&rows).Error; err != nil {

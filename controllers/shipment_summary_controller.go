@@ -307,7 +307,13 @@ func GetShipmentSummary(c *gin.Context) {
 			per.TotalAmount = per.NetAmount + per.TaxAmount
 			accumulateRow(&entry.row, &per)
 		}
-		sort.Strings(order)
+		if groupBy == "customer" {
+			sort.Strings(order)
+		} else {
+			sort.Slice(order, func(i, j int) bool {
+				return ModelCodeNaturalLess(order[i], order[j])
+			})
+		}
 		for _, k := range order {
 			e := aggMap[k]
 			e.row.Gross = e.row.NetAmount - e.row.Cost
@@ -336,7 +342,7 @@ func grossRate(gross, base float64) float64 {
 	if base == 0 {
 		return 0
 	}
-	return math.Round(gross/base*10000) / 100
+	return math.Round(gross / base * 100)
 }
 
 func accumulateRow(dst, src *shipmentSummaryRow) {

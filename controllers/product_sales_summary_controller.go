@@ -184,9 +184,9 @@ LEFT JOIN brands b ON b.id = p.brand_id
 LEFT JOIN product_vendors pv ON pv.product_id = p.id AND pv.is_primary = true
 LEFT JOIN vendors v ON v.id = pv.vendor_id
 %s
-ORDER BY p.model_code
+ORDER BY %s
 LIMIT ? OFFSET ?
-`, where)
+`, where, ModelCodeOrderBy("p.model_code"))
 
 	argsPage := append(append([]interface{}{}, args...), pageSize, offset)
 	var heads []productHead

@@ -22,7 +22,7 @@ func GetProducts(c *gin.Context) {
 	defer db.Close()
 
 	var items []models.Product
-	query := db.GetRead().Order("id ASC")
+	query := db.GetRead().Order(ModelCodeOrderBy("model_code"))
 	query = ApplySearch(query, c.Query("search"), "model_code", "name_spec")
 	if brandId := c.Query("brand_id"); brandId != "" {
 		query = query.Where("brand_id = ?", brandId)
