@@ -333,6 +333,100 @@ func GetReceivables(c *gin.Context) {
 	}).Send()
 }
 
+// receivableCustomerOption 應收帳款客戶清單選項
+type receivableCustomerOption struct {
+	ID   int64  `json:"id"`
+	Code string `json:"code"`
+	Name string `json:"name"`
+}
+
+// GetReceivableCustomers 應收帳款查詢的客戶清單
+// 套用與 GetReceivables 相同的 shipments WHERE 篩選（不含 customer_id），
+// 回傳該條件下「有帳款」的客戶。display_mode=unpaid 時僅含 outstanding>0 客戶。
+func GetReceivableCustomers(c *gin.Context) {
+	resp := response.New(c)
+	db := models.PostgresNew()
+	defer db.Close()
+
+	dateFrom := c.Query("date_from")
+	dateTo := c.Query("date_to")
+	closeMonthFrom := c.Query("close_month_from")
+	closeMonthTo := c.Query("close_month_to")
+	dealModeStr := c.Query("deal_mode")
+	displayMode := c.DefaultQuery("display_mode", "all")
+
+	whereSQL := "s.deleted_at IS NULL"
+	args := []any{}
+
+	if dateFrom != "" {
+		whereSQL += " AND s.shipment_date >= ?"
+		args = append(args, dateFrom)
+	}
+	if dateTo != "" {
+		whereSQL += " AND s.shipment_date <= ?"
+		args = append(args, dateTo)
+	}
+	if closeMonthFrom != "" {
+		whereSQL += " AND s.close_month >= ?"
+		args = append(args, closeMonthFrom)
+	}
+	if closeMonthTo != "" {
+		whereSQL += " AND s.close_month <= ?"
+		args = append(args, closeMonthTo)
+	}
+	if dealModeStr != "" {
+		if dm, err := strconv.Atoi(dealModeStr); err == nil && (dm == 1 || dm == 2) {
+			whereSQL += " AND s.deal_mode = ?"
+			args = append(args, dm)
+		}
+	}
+
+	type custIDRow struct {
+		CustomerID int64
+	}
+	var idRows []custIDRow
+
+	if displayMode == "unpaid" {
+		// 需聚合未收金額並 HAVING 過濾
+		sql := `SELECT s.customer_id
+			FROM shipments s
+			` + receivable.GatherDetailsAggJoin + `
+			WHERE ` + whereSQL + `
+			GROUP BY s.customer_id
+			HAVING SUM(` + receivable.OutstandingRoundedExpr + `) > 0`
+		db.GetRead().Raw(sql, args...).Scan(&idRows)
+	} else {
+		sql := `SELECT DISTINCT s.customer_id
+			FROM shipments s
+			WHERE ` + whereSQL
+		db.GetRead().Raw(sql, args...).Scan(&idRows)
+	}
+
+	if len(idRows) == 0 {
+		resp.Success("成功").SetData(gin.H{"rows": []receivableCustomerOption{}}).Send()
+		return
+	}
+
+	custIDs := make([]int64, 0, len(idRows))
+	for _, r := range idRows {
+		custIDs = append(custIDs, r.CustomerID)
+	}
+
+	var customers []models.RetailCustomer
+	db.GetRead().Where("id IN (?)", custIDs).Order("code ASC").Find(&customers)
+
+	rows := make([]receivableCustomerOption, 0, len(customers))
+	for _, c := range customers {
+		rows = append(rows, receivableCustomerOption{
+			ID:   c.ID,
+			Code: c.Code,
+			Name: c.Name,
+		})
+	}
+
+	resp.Success("成功").SetData(gin.H{"rows": rows}).Send()
+}
+
 // agingRow 應收帳齡分析表單列（客戶 × 月份矩陣）
 type agingRow struct {
 	CustomerID       int64     `json:"customer_id"`
