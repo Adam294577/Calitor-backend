@@ -74,6 +74,10 @@ func initConfig() {
 		// 找不到設定檔時僅靠環境變數運作（適用於容器部署）
 		fmt.Printf("⚠ 未載入設定檔（%s），將完全使用環境變數\n", config)
 	}
+
+	// 安全關鍵設定明確 BindEnv,避免 viper 對巢狀 key 的 AutomaticEnv 在不同版本行為不一致
+	// 確保 SERVER_SECURITY_ALLOWEDOFFICEIP 一定能覆蓋 YAML 的同名欄位
+	_ = viper.BindEnv("Server.Security.AllowedOfficeIP", "SERVER_SECURITY_ALLOWEDOFFICEIP")
 }
 
 var HttpServer *gin.Engine
