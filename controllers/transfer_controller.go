@@ -280,10 +280,6 @@ func UpdateTransfer(c *gin.Context) {
 		resp.Fail(http.StatusNotFound, "調撥單不存在").Send()
 		return
 	}
-	if existing.Confirmed {
-		resp.Fail(http.StatusForbidden, "已確認的調撥單不可修改").Send()
-		return
-	}
 
 	var req struct {
 		TransferDate string `json:"transfer_date"`
@@ -491,10 +487,6 @@ func DeleteTransfer(c *gin.Context) {
 	var transfer models.Transfer
 	if err := db.GetRead().Where("id = ?", id).First(&transfer).Error; err != nil {
 		resp.Fail(http.StatusNotFound, "調撥單不存在").Send()
-		return
-	}
-	if transfer.Confirmed {
-		resp.Fail(http.StatusForbidden, "已確認的調撥單不可刪除").Send()
 		return
 	}
 
