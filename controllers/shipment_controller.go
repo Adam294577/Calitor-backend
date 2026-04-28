@@ -444,7 +444,7 @@ func CreateShipment(c *gin.Context) {
 			}
 		}
 
-		// 計算應收金額（含稅合計），退貨為負數
+		// 計算應收金額（含稅合計 - 折扣），退貨為負數
 		var totalShipAmount float64
 		for _, reqItem := range req.Items {
 			qty := 0
@@ -457,7 +457,7 @@ func CreateShipment(c *gin.Context) {
 		if req.TaxMode == 2 {
 			taxAmt = math.Round(totalShipAmount * req.TaxRate / 100)
 		}
-		dealAmount := totalShipAmount + taxAmt
+		dealAmount := totalShipAmount + taxAmt - req.DiscountAmount
 		if req.ShipmentMode == 4 {
 			dealAmount = -dealAmount // 退貨為負數
 		}
@@ -716,7 +716,7 @@ func UpdateShipment(c *gin.Context) {
 			}
 		}
 
-		// 重算應收金額，退貨為負數
+		// 重算應收金額（含稅合計 - 折扣），退貨為負數
 		var totalShipAmount float64
 		for _, reqItem := range req.Items {
 			qty := 0
@@ -729,7 +729,7 @@ func UpdateShipment(c *gin.Context) {
 		if req.TaxMode == 2 {
 			taxAmt = math.Round(totalShipAmount * req.TaxRate / 100)
 		}
-		dealAmount := totalShipAmount + taxAmt
+		dealAmount := totalShipAmount + taxAmt - req.DiscountAmount
 		if req.ShipmentMode == 4 {
 			dealAmount = -dealAmount
 		}
