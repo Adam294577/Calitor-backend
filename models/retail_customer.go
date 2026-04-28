@@ -25,6 +25,7 @@ type RetailCustomer struct {
 	TaxId              string         `gorm:"type:varchar(20)" json:"tax_id"`
 	InvoiceName        string         `gorm:"type:varchar(200)" json:"invoice_name"`
 	TaxRate            float64        `gorm:"type:decimal(5,2);default:5" json:"tax_rate"`
+	TaxMode            int            `gorm:"default:2" json:"tax_mode"` // 出貨稅金 1=含稅 2=應稅
 	Discount           int            `gorm:"default:100" json:"discount"`
 	CreatedDate        string         `gorm:"type:varchar(20)" json:"created_date"`
 	CreditLimit        float64        `gorm:"type:decimal(12,2)" json:"credit_limit"`

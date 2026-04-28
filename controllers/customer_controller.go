@@ -58,10 +58,11 @@ func GetCustomerOptions(c *gin.Context) {
 		ShippingAddress string `json:"shipping_address"`
 		SalesmanID      *int64 `json:"salesman_id"`
 		Discount        int    `json:"discount"`
+		TaxMode         int    `json:"tax_mode"`
 	}
 	var items []option
 	db.GetRead().Model(&models.RetailCustomer{}).
-		Select("id, code, name, short_name, branch_code, closing_date, phone1, shipping_address, salesman_id, discount").
+		Select("id, code, name, short_name, branch_code, closing_date, phone1, shipping_address, salesman_id, discount, tax_mode").
 		Where("is_visible = ?", true).
 		Order(ModelCodeOrderBy("code")).
 		Find(&items)
@@ -132,6 +133,7 @@ func UpdateCustomer(c *gin.Context) {
 		TaxId              *string  `json:"tax_id"`
 		InvoiceName        *string  `json:"invoice_name"`
 		TaxRate            *float64 `json:"tax_rate"`
+		TaxMode            *int     `json:"tax_mode"`
 		Discount           *int     `json:"discount"`
 		CreatedDate        *string  `json:"created_date"`
 		CreditLimit        *float64 `json:"credit_limit"`
