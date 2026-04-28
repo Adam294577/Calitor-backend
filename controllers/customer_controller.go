@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 func GetCustomers(c *gin.Context) {
@@ -20,8 +21,14 @@ func GetCustomers(c *gin.Context) {
 	defer db.Close()
 
 	var items []models.RetailCustomer
-	query := db.GetRead().Preload("Location").Order("id ASC")
-	query = ApplySearch(query, c.Query("search"), "code", "name", "short_name")
+	search := c.Query("search")
+	query := db.GetRead().Preload("Location")
+	if search != "" {
+		// code 前綴匹配優先 (例:輸入 90 時,9005/9021 排在 1906/1907 前)
+		query = query.Order(gorm.Expr("CASE WHEN code ILIKE ? THEN 0 ELSE 1 END", search+"%"))
+	}
+	query = query.Order(ModelCodeOrderBy("code"))
+	query = ApplySearch(query, search, "code", "name", "short_name")
 	if locId := c.Query("location_id"); locId != "" {
 		query = query.Where("location_id = ?", locId)
 	}
@@ -56,7 +63,7 @@ func GetCustomerOptions(c *gin.Context) {
 	db.GetRead().Model(&models.RetailCustomer{}).
 		Select("id, code, name, short_name, branch_code, closing_date, phone1, shipping_address, salesman_id, discount").
 		Where("is_visible = ?", true).
-		Order("id ASC").
+		Order(ModelCodeOrderBy("code")).
 		Find(&items)
 	setListCache(c, items, 0)
 	resp.Success("成功").SetData(items).Send()

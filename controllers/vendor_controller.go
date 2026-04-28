@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 func GetVendors(c *gin.Context) {
@@ -21,8 +22,14 @@ func GetVendors(c *gin.Context) {
 	defer db.Close()
 
 	var items []models.Vendor
-	query := db.GetRead().Preload("Category").Order("id ASC")
-	query = ApplySearch(query, c.Query("search"), "code", "name", "short_name")
+	search := c.Query("search")
+	query := db.GetRead().Preload("Category")
+	if search != "" {
+		// code 前綴匹配優先 (例:輸入 54 時,540/541 排在 054/154 前)
+		query = query.Order(gorm.Expr("CASE WHEN code ILIKE ? THEN 0 ELSE 1 END", search+"%"))
+	}
+	query = query.Order(ModelCodeOrderBy("code"))
+	query = ApplySearch(query, search, "code", "name", "short_name")
 	if catId := c.Query("category_id"); catId != "" {
 		query = query.Where("category_id = ?", catId)
 	}
@@ -50,7 +57,7 @@ func GetVendorOptions(c *gin.Context) {
 	var items []option
 	db.GetRead().Model(&models.Vendor{}).
 		Select("id, code, name, short_name").
-		Order("id ASC").
+		Order(ModelCodeOrderBy("code")).
 		Find(&items)
 	setListCache(c, items, 0)
 	resp.Success("成功").SetData(items).Send()

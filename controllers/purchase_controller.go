@@ -501,20 +501,16 @@ func SearchProducts(c *gin.Context) {
 	// --- 商品主檔：先查 Redis，miss 再打 DB ---
 	var items []models.Product
 	if !getListCache(c, &items) {
-		query := db.GetRead().Order("id ASC")
+		query := db.GetRead().Order(ModelCodeOrderBy("model_code"))
 		if vendorID != "" {
 			query = query.Where("id IN (SELECT product_id FROM product_vendors WHERE vendor_id = ?)", vendorID)
 		}
 		if brandID != "" {
 			query = query.Where("brand_id = ?", brandID)
 		}
-		if customerID != "" && vendorID == "" && brandID == "" && orderContext != "1" {
-			// 出貨用：依客戶的訂貨明細找商品（訂貨情境不套用，訂貨時未選品牌應顯示全部商品）
-			query = query.Where("id IN (SELECT DISTINCT oi.product_id FROM order_items oi JOIN orders o ON o.id = oi.order_id AND o.deleted_at IS NULL WHERE o.customer_id = ?)", customerID)
-		}
 		if search != "" {
-			like := "%" + search + "%"
-			query = query.Where("model_code ILIKE ? OR name_spec ILIKE ?", like, like)
+			// 商品列的模糊搜尋只用型號 (使用者偏好,品名規格不參與)
+			query = query.Where("model_code ILIKE ?", "%"+search+"%")
 		}
 
 		query.
@@ -537,7 +533,7 @@ func SearchProducts(c *gin.Context) {
 				}
 				return db
 			}).
-			Limit(20).
+			Limit(100).
 			Find(&items)
 
 		setListCacheRaw(c, items)
@@ -563,37 +559,6 @@ func SearchProducts(c *gin.Context) {
 		}
 		for i := range items {
 			items[i].SizeStocks = stockMap[items[i].ID]
-		}
-	}
-
-	// --- 即時查訂貨明細（不快取）：出貨用，帶入售價/數量（訂貨情境走下方 supplement_info 分支）---
-	if customerID != "" && orderContext != "1" {
-		var productIDs []int64
-		for _, p := range items {
-			productIDs = append(productIDs, p.ID)
-		}
-		if len(productIDs) > 0 {
-			var orderItems []models.OrderItem
-			db.GetRead().
-				Preload("Sizes").
-				Joins("JOIN orders ON orders.id = order_items.order_id AND orders.deleted_at IS NULL AND orders.customer_id = ?", customerID).
-				Where("order_items.product_id IN ?", productIDs).
-				Order("orders.order_date DESC, order_items.id DESC").
-				Find(&orderItems)
-
-			// 每個 product 取最新一筆 orderItem
-			orderItemMap := map[int64]models.OrderItem{}
-			for _, oi := range orderItems {
-				if _, exists := orderItemMap[oi.ProductID]; !exists {
-					orderItemMap[oi.ProductID] = oi
-				}
-			}
-
-			resp.Success("成功").SetData(map[string]interface{}{
-				"products":    items,
-				"order_items": orderItemMap,
-			}).Send()
-			return
 		}
 	}
 
