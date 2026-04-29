@@ -11,9 +11,10 @@ import (
 )
 
 // CreateBatchSharedHeader 批次建立進貨單共用表頭。
+// CustomerID 為可選的「整批預設庫點」(向後相容);若 per-stock CustomerID 有值則優先使用 per-stock。
 type CreateBatchSharedHeader struct {
 	StockDate       string  `json:"stock_date" binding:"required"`
-	CustomerID      int64   `json:"customer_id" binding:"required"`
+	CustomerID      int64   `json:"customer_id"` // optional fallback;per-stock 優先
 	StockMode       int     `json:"stock_mode"`
 	DealMode        int     `json:"deal_mode"`
 	FillPersonID    *int64  `json:"fill_person_id"`
@@ -46,7 +47,9 @@ type CreateBatchItem struct {
 }
 
 // CreateBatchStock 單一進貨單（同一批次中會建多張）。
+// CustomerID 可由此處傳入(支援多庫點批次);若為 0 則 fallback 到 SharedHeader.CustomerID。
 type CreateBatchStock struct {
+	CustomerID    int64             `json:"customer_id"`
 	VendorID      int64             `json:"vendor_id" binding:"required"`
 	VendorStockNo string            `json:"vendor_stock_no"`
 	Items         []CreateBatchItem `json:"items"`
@@ -67,16 +70,12 @@ type CreatedInfo struct {
 }
 
 // CreateBatch 單交易批次建立多張進貨單，連號產生，失敗整體 rollback。
+// 支援每張 stock 屬於不同客戶(庫點);per-stock CustomerID 為 0 時 fallback 到 SharedHeader.CustomerID。
 // 呼叫端須傳入 Transaction 的 tx。
 // recorderID 通常來自 gin context 中的 AdminId。
 func CreateBatch(tx *gorm.DB, payload CreateBatchPayload, recorderID int64) ([]CreatedInfo, error) {
 	if len(payload.Stocks) == 0 {
 		return nil, fmt.Errorf("無進貨單資料")
-	}
-
-	var customer models.RetailCustomer
-	if err := tx.Where("id = ?", payload.SharedHeader.CustomerID).First(&customer).Error; err != nil {
-		return nil, fmt.Errorf("客戶不存在")
 	}
 
 	sh := payload.SharedHeader
@@ -105,31 +104,59 @@ func CreateBatch(tx *gorm.DB, payload CreateBatchPayload, recorderID int64) ([]C
 	if len(sh.StockDate) >= 6 {
 		yyyymm = sh.StockDate[:6]
 	}
-	noPrefix := prefix + customer.BranchCode + yyyymm
 
-	var maxNo string
-	if err := tx.Unscoped().Model(&models.Stock{}).
-		Where("stock_no LIKE ?", noPrefix+"%").
-		Select("MAX(stock_no)").
-		Scan(&maxNo).Error; err != nil {
-		return nil, fmt.Errorf("查詢流水號失敗:%w", err)
-	}
-
-	seq := 1
-	if maxNo != "" && len(maxNo) > len(noPrefix) {
-		tail := maxNo[len(noPrefix):]
-		if n, err := strconv.Atoi(tail); err == nil {
-			seq = n + 1
-		}
-	}
+	// 每個 (branch_code, yyyymm) 各自連號;以 noPrefix 為 key 緩存當前 seq
+	seqByPrefix := map[string]int{}
+	customerCache := map[int64]models.RetailCustomer{}
 
 	var created []CreatedInfo
 	var allPurchaseItemIDs []int64
 
 	for idx := range payload.Stocks {
 		st := payload.Stocks[idx]
+
+		// 解析此張 stock 的 customer
+		effCustomerID := st.CustomerID
+		if effCustomerID == 0 {
+			effCustomerID = sh.CustomerID
+		}
+		if effCustomerID == 0 {
+			return nil, fmt.Errorf("第 %d 張:未指定客戶", idx+1)
+		}
+		customer, cached := customerCache[effCustomerID]
+		if !cached {
+			if err := tx.Where("id = ?", effCustomerID).First(&customer).Error; err != nil {
+				return nil, fmt.Errorf("第 %d 張:客戶 ID %d 不存在", idx+1, effCustomerID)
+			}
+			customerCache[effCustomerID] = customer
+		}
+
+		// 連號 prefix 以該 stock 客戶的 branch_code 為準
+		noPrefix := prefix + customer.BranchCode + yyyymm
+		seq, exists := seqByPrefix[noPrefix]
+		if !exists {
+			// 用 Postgres advisory lock 鎖在 (noPrefix) 上,避免並發撞號
+			// 鎖在 transaction 結束自動釋放,不影響其他 noPrefix 的並發寫入
+			if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", "stock_no:"+noPrefix).Error; err != nil {
+				return nil, fmt.Errorf("取得流水號鎖失敗:%w", err)
+			}
+			var maxNo string
+			if err := tx.Unscoped().Model(&models.Stock{}).
+				Where("stock_no LIKE ?", noPrefix+"%").
+				Select("MAX(stock_no)").
+				Scan(&maxNo).Error; err != nil {
+				return nil, fmt.Errorf("查詢流水號失敗:%w", err)
+			}
+			seq = 1
+			if maxNo != "" && len(maxNo) > len(noPrefix) {
+				tail := maxNo[len(noPrefix):]
+				if n, perr := strconv.Atoi(tail); perr == nil {
+					seq = n + 1
+				}
+			}
+		}
 		stockNo := fmt.Sprintf("%s%04d", noPrefix, seq)
-		seq++
+		seqByPrefix[noPrefix] = seq + 1
 
 		var vendor models.Vendor
 		if err := tx.Where("id = ?", st.VendorID).First(&vendor).Error; err != nil {
@@ -147,7 +174,7 @@ func CreateBatch(tx *gorm.DB, payload CreateBatchPayload, recorderID int64) ([]C
 		s := models.Stock{
 			StockNo:         stockNo,
 			StockDate:       sh.StockDate,
-			CustomerID:      sh.CustomerID,
+			CustomerID:      customer.ID,
 			VendorID:        st.VendorID,
 			VendorStockNo:   st.VendorStockNo,
 			StockMode:       sh.StockMode,
