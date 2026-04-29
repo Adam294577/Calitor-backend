@@ -48,21 +48,22 @@ func GetCustomerOptions(c *gin.Context) {
 	defer db.Close()
 
 	type option struct {
-		ID              int64  `json:"id"`
-		Code            string `json:"code"`
-		Name            string `json:"name"`
-		ShortName       string `json:"short_name"`
-		BranchCode      string `json:"branch_code"`
-		ClosingDate     int    `json:"closing_date"`
-		Phone1          string `json:"phone1"`
-		ShippingAddress string `json:"shipping_address"`
-		SalesmanID      *int64 `json:"salesman_id"`
-		Discount        int    `json:"discount"`
-		TaxMode         int    `json:"tax_mode"`
+		ID              int64   `json:"id"`
+		Code            string  `json:"code"`
+		Name            string  `json:"name"`
+		ShortName       string  `json:"short_name"`
+		BranchCode      string  `json:"branch_code"`
+		ClosingDate     int     `json:"closing_date"`
+		Phone1          string  `json:"phone1"`
+		ShippingAddress string  `json:"shipping_address"`
+		SalesmanID      *int64  `json:"salesman_id"`
+		Discount        int     `json:"discount"`
+		TaxMode         int     `json:"tax_mode"`
+		TaxRate         float64 `json:"tax_rate"`
 	}
 	var items []option
 	db.GetRead().Model(&models.RetailCustomer{}).
-		Select("id, code, name, short_name, branch_code, closing_date, phone1, shipping_address, salesman_id, discount, tax_mode").
+		Select("id, code, name, short_name, branch_code, closing_date, phone1, shipping_address, salesman_id, discount, tax_mode, tax_rate").
 		Where("is_visible = ?", true).
 		Order(ModelCodeOrderBy("code")).
 		Find(&items)
