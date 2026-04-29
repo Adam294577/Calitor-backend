@@ -227,6 +227,7 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.DELETE("/shipments/:id", middlewares.RequirePermission("shipments.delete"), controllers.DeleteShipment)
 		adminAuth.GET("/shipments/credit/:customer_id", middlewares.RequirePermission("shipments.view"), controllers.GetCustomerCredit)
 		adminAuth.POST("/shipments/barcode-parse", middlewares.RequirePermission("shipments.create"), controllers.BarcodeParse)
+		adminAuth.POST("/shipments/batch", middlewares.RequirePermission("shipments.create"), controllers.CreateShipmentBatch)
 
 		// 庫存管理 - 庫存查詢
 		adminAuth.GET("/inventory", middlewares.RequirePermission("inventory-query.view"), controllers.GetInventory)
