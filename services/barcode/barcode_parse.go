@@ -267,19 +267,25 @@ func ParseAndAllocate(db *gorm.DB, customerID int64, entries []Entry) (*ParseAnd
 	var noVendorItems []ResultItem
 	seq := 0
 
-	emitNoVendor := func(sample parsedItem, prodID int64, prodName string, qty int) {
+	emitNoVendor := func(sample parsedItem, prod *models.Product, qty int) {
 		seq++
+		// 沒對應未交採購單時帶入該型號建檔的原幣價,前端再依 currency_code 換算 TWD
+		// (與 SizeQtyTable.vue type='stock' 的邏輯一致)
 		noVendorItems = append(noVendorItems, ResultItem{
-			RowKey:        fmt.Sprintf("nv-%d-%d-%d", prodID, sample.SizeOptionID, seq),
+			RowKey:        fmt.Sprintf("nv-%d-%d-%d", prod.ID, sample.SizeOptionID, seq),
 			Barcode:       sample.Barcode,
 			ModelCode:     sample.ModelCode,
-			ProductID:     prodID,
-			ProductName:   prodName,
+			ProductID:     prod.ID,
+			ProductName:   prod.NameSpec,
 			SizeGroupID:   sample.SizeGroupID,
 			SizeGroupCode: sample.SizeGroupCode,
 			SizeOptionID:  sample.SizeOptionID,
 			SizeLabel:     sample.SizeLabel,
 			Qty:           qty,
+			CurrencyCode:  prod.Currency,
+			AdvicePrice:   prod.MSRP,
+			PurchasePrice: prod.OriginalPrice,
+			NonTaxPrice:   prod.OriginalPrice,
 			Status:        "ok",
 		})
 	}
@@ -292,7 +298,7 @@ func ParseAndAllocate(db *gorm.DB, customerID int64, entries []Entry) (*ParseAnd
 		cands := candidateMap[mapKey]
 
 		if len(cands) == 0 {
-			emitNoVendor(p, prod.ID, prod.NameSpec, a.TotalQty)
+			emitNoVendor(p, prod, a.TotalQty)
 			continue
 		}
 
@@ -353,7 +359,7 @@ func ParseAndAllocate(db *gorm.DB, customerID int64, entries []Entry) (*ParseAnd
 
 		// 該廠商所有 PO 的 outstanding 都吃完還有剩 → 進「無廠商」
 		if remaining > 0 {
-			emitNoVendor(p, prod.ID, prod.NameSpec, remaining)
+			emitNoVendor(p, prod, remaining)
 		}
 	}
 

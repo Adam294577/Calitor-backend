@@ -82,7 +82,8 @@ func Parse(barcode string, sgList []sgInfo) (*ParsedBarcode, *ParseError) {
 			}
 		}
 		opt := sg.Options[pos-1]
-		modelCode := bc[:len(bc)-suffixLen]
+		// 去除型號末端空白(條碼可能形如 "GB2606-01 G02",前段保留空白會與 DB 不匹配)
+		modelCode := strings.TrimRight(bc[:len(bc)-suffixLen], " \t")
 		return &ParsedBarcode{
 			Barcode:       bc,
 			ModelCode:     modelCode,
