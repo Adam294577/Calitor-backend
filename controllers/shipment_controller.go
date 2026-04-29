@@ -942,12 +942,70 @@ func BarcodeParse(c *gin.Context) {
 	}
 
 	productMap := map[string]*models.Product{} // model_code → Product
+	productIDs := make([]int64, 0, len(mcList))
 	if len(mcList) > 0 {
 		var products []models.Product
 		db.GetRead().Where("model_code IN ?", mcList).Find(&products)
 		for i := range products {
 			productMap[products[i].ModelCode] = &products[i]
+			productIDs = append(productIDs, products[i].ID)
 		}
+	}
+
+	// 該客戶 × 各型號最早一次「舖」的 order_price (與鍵盤輸入 supplement_info.first_pu_price 邏輯一致)
+	firstPuPriceMap := map[int64]float64{}
+	// 該客戶 × 各型號是否有出貨歷史(對齊 purchase_controller supplement_info.has_shipment_history)
+	// 用於決定無未交單時 supplement 該設 1(舖) 還是 2(補)
+	hasShipmentSet := map[int64]bool{}
+	if len(productIDs) > 0 {
+		type priceRow struct {
+			ProductID  int64
+			OrderPrice float64
+		}
+		var priceRows []priceRow
+		db.GetRead().Raw(`
+			SELECT DISTINCT ON (oi.product_id) oi.product_id, oi.order_price
+			FROM order_items oi
+			JOIN orders o ON o.id = oi.order_id AND o.deleted_at IS NULL
+			WHERE o.customer_id = ? AND oi.product_id IN (?) AND oi.supplement = 1
+			ORDER BY oi.product_id, o.order_date ASC, oi.id ASC
+		`, req.CustomerID, productIDs).Scan(&priceRows)
+		for _, r := range priceRows {
+			firstPuPriceMap[r.ProductID] = r.OrderPrice
+		}
+
+		type shipRow struct {
+			ProductID int64
+		}
+		var shipRows []shipRow
+		db.GetRead().Table("shipment_items AS si").
+			Select("DISTINCT si.product_id").
+			Joins("JOIN shipments s ON s.id = si.shipment_id AND s.deleted_at IS NULL").
+			Where("s.customer_id = ? AND si.product_id IN ?", req.CustomerID, productIDs).
+			Scan(&shipRows)
+		for _, r := range shipRows {
+			hasShipmentSet[r.ProductID] = true
+		}
+	}
+
+	// 無未交單時的 supplement 判定:該客戶該型號出貨過 → 2(補),否則 1(舖)
+	supplementForFree := func(productID int64) int {
+		if hasShipmentSet[productID] {
+			return 2
+		}
+		return 1
+	}
+
+	// 沒命中未交單時的 fallback 批價：first_pu_price > wholesale_tax_incl > wholesale
+	// (對齊 SizeQtyTable.vue type='shipment' 的邏輯)
+	fallbackShipPrice := func(prod *models.Product) float64 {
+		if pu := firstPuPriceMap[prod.ID]; pu > 0 {
+			return pu
+		}
+		if prod.WholesaleTaxIncl > 0 {
+			return prod.WholesaleTaxIncl
+		}
+		return prod.Wholesale
 	}
 
 	// 4. 篩掉查無商品的，收集有效的 product_id
@@ -1013,7 +1071,7 @@ func BarcodeParse(c *gin.Context) {
 				SizeLabel:     p.SizeLabel,
 				Qty:           p.Qty,
 				SellPrice:     prod.MSRP,
-				ShipPrice:     prod.Wholesale,
+				ShipPrice:     fallbackShipPrice(prod),
 				NonTaxPrice:   prod.Wholesale,
 				Status:        "ok",
 			}
@@ -1031,12 +1089,7 @@ func BarcodeParse(c *gin.Context) {
 	}
 
 	// 5. 查該客戶未交訂單的 OrderItem（含 Sizes）
-	var productIDs []int64
-	for _, mc := range mcList {
-		if prod, ok := productMap[mc]; ok {
-			productIDs = append(productIDs, prod.ID)
-		}
-	}
+	// productIDs 已在前面填好(從 productMap 同一批 products),這裡直接重用
 
 	var orderItems []models.OrderItem
 	if len(productIDs) > 0 {
@@ -1133,9 +1186,27 @@ func BarcodeParse(c *gin.Context) {
 		candidates, hasCand := candidateMap[candKey]
 
 		if !hasCand || len(candidates) == 0 {
-			errors = append(errors, errorEntry{
-				Barcode: p.Barcode,
-				Reason:  fmt.Sprintf("此客戶無此商品+尺碼的未交訂單 (%s 尺碼%s)", p.ModelCode, p.SizeLabel),
+			// 無對應未交訂單 → 仍輸出為自由出貨列(order_item_id=0,批價取建檔批價)
+			// 與鍵盤輸入一致:沒有訂貨單也能照常出貨;Supplement 依該客戶該型號出貨歷史判定
+			resultItems = append(resultItems, resultItem{
+				Barcode:        p.Barcode,
+				ModelCode:      p.ModelCode,
+				ProductID:      prod.ID,
+				ProductName:    prod.NameSpec,
+				SizeGroupID:    p.SizeGroupID,
+				SizeGroupCode:  p.SizeGroupCode,
+				SizeOptionID:   p.SizeOptionID,
+				SizeLabel:      p.SizeLabel,
+				Qty:            p.Qty,
+				OrderItemID:    0,
+				OrderNo:        "",
+				OutstandingQty: 0,
+				SellPrice:      prod.MSRP,
+				Discount:       0,
+				ShipPrice:      fallbackShipPrice(prod),
+				NonTaxPrice:    prod.Wholesale,
+				Supplement:     supplementForFree(prod.ID),
+				Status:         "ok",
 			})
 			continue
 		}
