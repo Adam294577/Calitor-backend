@@ -271,9 +271,19 @@ func GetOrderOutstanding(c *gin.Context) {
 		})
 	}
 
-	// 7. 排序:商品型號 natural sort (對帳品牌分組已取消)
+	// 7. 排序:商品型號 natural sort (對帳品牌分組已取消);同型號補次要排序鍵以確保穩定輸出
 	sort.SliceStable(sortable, func(i, j int) bool {
-		return ModelCodeNaturalLess(sortable[i].row.ModelCode, sortable[j].row.ModelCode)
+		a, b := sortable[i].row, sortable[j].row
+		if a.ModelCode != b.ModelCode {
+			return ModelCodeNaturalLess(a.ModelCode, b.ModelCode)
+		}
+		if a.OrderDate != b.OrderDate {
+			return a.OrderDate < b.OrderDate
+		}
+		if a.OrderNo != b.OrderNo {
+			return a.OrderNo < b.OrderNo
+		}
+		return a.CustomerCode < b.CustomerCode
 	})
 
 	rows := make([]orderOutstandingRow, 0, len(sortable))
