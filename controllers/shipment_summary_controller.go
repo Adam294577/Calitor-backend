@@ -53,7 +53,8 @@ func GetShipmentSummary(c *gin.Context) {
 	dateTo := c.Query("date_to")
 	customerIDs := c.QueryArray("customer_id")
 	salesmanIDs := c.QueryArray("salesman_id")
-	modelCodes := c.QueryArray("model_code")
+	modelCodeFrom := c.Query("model_code_from")
+	modelCodeTo := c.Query("model_code_to")
 	brandIDStrs := c.QueryArray("brand_id")
 	shipModeStr := c.Query("ship_mode")    // "" | "3" | "4"
 	supplementStr := c.Query("supplement") // "" | "1" | "2"
@@ -112,14 +113,15 @@ func GetShipmentSummary(c *gin.Context) {
 	}
 
 	// 明細層過濾：舖補 / 型號 / 品牌 —— 改從 SQL WHERE 過濾，避免先 Preload 全部再於應用層 filter 造成 N+1
+	modelFrag, modelArgs := BuildModelCodeRangeWhere("products.model_code", modelCodeFrom, modelCodeTo)
 	applyItemFilter := func(q *gorm.DB) *gorm.DB {
 		if supplementStr == "1" || supplementStr == "2" {
 			q = q.Where("shipment_items.supplement = ?", supplementStr)
 		}
-		if len(modelCodes) > 0 || len(brandIDs) > 0 {
+		if modelFrag != "" || len(brandIDs) > 0 {
 			q = q.Joins("JOIN products ON products.id = shipment_items.product_id")
-			if len(modelCodes) > 0 {
-				q = q.Where("products.model_code IN ?", modelCodes)
+			if modelFrag != "" {
+				q = q.Where(modelFrag, modelArgs...)
 			}
 			if len(brandIDs) > 0 {
 				q = q.Where("products.brand_id IN ?", brandIDs)
@@ -127,7 +129,7 @@ func GetShipmentSummary(c *gin.Context) {
 		}
 		return q
 	}
-	hasItemFilter := (supplementStr == "1" || supplementStr == "2") || len(modelCodes) > 0 || len(brandIDs) > 0
+	hasItemFilter := (supplementStr == "1" || supplementStr == "2") || modelFrag != "" || len(brandIDs) > 0
 	if hasItemFilter {
 		sub := applyItemFilter(db.GetRead().Model(&models.ShipmentItem{}).Select("shipment_items.shipment_id"))
 		query = query.Where("shipments.id IN (?)", sub)

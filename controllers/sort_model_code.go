@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"strings"
 )
 
 // ModelCodeOrderBy returns the comma-separated ORDER BY keys that sort the
@@ -79,4 +80,50 @@ func modelCodeNaturalKey(s string) (string, int64, string, int64) {
 		}
 	}
 	return k1, k2, k3, k4
+}
+
+// BuildModelCodeRangeWhere 產生 model_code 區間查詢的 WHERE 片段 (lex 字典序、case-insensitive)。
+//   from + to 都有 → [from, to]
+//   只有 from → [from, "zzz"] (迄補 zzz 當 max,等同開放上界)
+//   只有 to   → ["",   to]    (起為空字串,等同開放下界)
+//   兩個都空 → 回傳 ("", nil),caller 自行略過
+//
+// 注意:過濾用 lex,排序仍用 ModelCodeOrderBy 自然序。兩者刻意分離。
+//
+// 用法 (raw SQL):
+//   if frag, fargs := BuildModelCodeRangeWhere("p.model_code", from, to); frag != "" {
+//       where += " AND " + frag
+//       args = append(args, fargs...)
+//   }
+//
+// 用法 (GORM):
+//   if frag, fargs := BuildModelCodeRangeWhere("products.model_code", from, to); frag != "" {
+//       q = q.Where(frag, fargs...)
+//   }
+func BuildModelCodeRangeWhere(col, from, to string) (string, []interface{}) {
+	from = strings.TrimSpace(from)
+	to = strings.TrimSpace(to)
+	if from == "" && to == "" {
+		return "", nil
+	}
+	if to == "" {
+		to = "zzz"
+	}
+	return fmt.Sprintf("UPPER(%s) >= UPPER(?) AND UPPER(%s) <= UPPER(?)", col, col),
+		[]interface{}{from, to}
+}
+
+// MatchModelCodeRange 應用層判斷 code 是否落在 [from, to] 區間內,規則同 BuildModelCodeRangeWhere。
+// 兩個都空 → 視為「不過濾」回傳 true。
+func MatchModelCodeRange(code, from, to string) bool {
+	from = strings.TrimSpace(from)
+	to = strings.TrimSpace(to)
+	if from == "" && to == "" {
+		return true
+	}
+	if to == "" {
+		to = "zzz"
+	}
+	u := strings.ToUpper(code)
+	return u >= strings.ToUpper(from) && u <= strings.ToUpper(to)
 }

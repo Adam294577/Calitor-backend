@@ -7,7 +7,6 @@ import (
 	response "project/services/responses"
 	"sort"
 	"strconv"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -48,7 +47,8 @@ func GetPurchaseOutstanding(c *gin.Context) {
 	expectedTo := c.Query("expected_to")
 	vendorIDs := c.QueryArray("vendor_id")
 	customerIDs := c.QueryArray("customer_id")
-	modelCodeSearch := strings.ToUpper(c.Query("model_code"))
+	modelCodeFrom := c.Query("model_code_from")
+	modelCodeTo := c.Query("model_code_to")
 	purchaseNoSearch := c.Query("purchase_no")
 
 	// 1. 查 purchases WHERE delivery_status < 2
@@ -185,7 +185,7 @@ func GetPurchaseOutstanding(c *gin.Context) {
 				modelCode = item.Product.ModelCode
 				productName = item.Product.NameSpec
 			}
-			if modelCodeSearch != "" && !strings.Contains(strings.ToUpper(modelCode), modelCodeSearch) {
+			if !MatchModelCodeRange(modelCode, modelCodeFrom, modelCodeTo) {
 				continue
 			}
 			sizeGroupCode := ""

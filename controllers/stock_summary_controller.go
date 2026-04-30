@@ -49,7 +49,8 @@ func GetStockSummary(c *gin.Context) {
 	dateTo := c.Query("date_to")
 	vendorIDs := c.QueryArray("vendor_id")
 	customerIDs := c.QueryArray("customer_id") // 店櫃
-	modelCodes := c.QueryArray("model_code")
+	modelCodeFrom := c.Query("model_code_from")
+	modelCodeTo := c.Query("model_code_to")
 	brandIDStrs := c.QueryArray("brand_id")
 	stockModeStr := c.Query("stock_mode") // "" | "1" | "2"
 	remark := strings.TrimSpace(c.Query("remark"))
@@ -101,11 +102,12 @@ func GetStockSummary(c *gin.Context) {
 	}
 
 	// 明細層過濾：型號 / 品牌 —— 改從 SQL WHERE 過濾，避免先 Preload 全部再於應用層 filter
+	modelFrag, modelArgs := BuildModelCodeRangeWhere("products.model_code", modelCodeFrom, modelCodeTo)
 	applyItemFilter := func(q *gorm.DB) *gorm.DB {
-		if len(modelCodes) > 0 || len(brandIDs) > 0 {
+		if modelFrag != "" || len(brandIDs) > 0 {
 			q = q.Joins("JOIN products ON products.id = stock_items.product_id")
-			if len(modelCodes) > 0 {
-				q = q.Where("products.model_code IN ?", modelCodes)
+			if modelFrag != "" {
+				q = q.Where(modelFrag, modelArgs...)
 			}
 			if len(brandIDs) > 0 {
 				q = q.Where("products.brand_id IN ?", brandIDs)
@@ -113,7 +115,7 @@ func GetStockSummary(c *gin.Context) {
 		}
 		return q
 	}
-	hasItemFilter := len(modelCodes) > 0 || len(brandIDs) > 0
+	hasItemFilter := modelFrag != "" || len(brandIDs) > 0
 	if hasItemFilter {
 		sub := applyItemFilter(db.GetRead().Model(&models.StockItem{}).Select("stock_items.stock_id"))
 		query = query.Where("stocks.id IN (?)", sub)

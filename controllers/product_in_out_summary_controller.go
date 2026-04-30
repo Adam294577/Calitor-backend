@@ -55,9 +55,9 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 	where := "WHERE p.deleted_at IS NULL AND p.is_visible = true"
 	args := []interface{}{}
 
-	if v := c.Query("model_code"); v != "" {
-		where += " AND p.model_code ILIKE ?"
-		args = append(args, "%"+v+"%")
+	if frag, fargs := BuildModelCodeRangeWhere("p.model_code", c.Query("model_code_from"), c.Query("model_code_to")); frag != "" {
+		where += " AND " + frag
+		args = append(args, fargs...)
 	}
 	if v := c.Query("brand_ids"); v != "" {
 		ids := splitNonEmpty(v)

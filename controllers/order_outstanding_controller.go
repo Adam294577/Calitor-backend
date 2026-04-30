@@ -49,7 +49,8 @@ func GetOrderOutstanding(c *gin.Context) {
 	dateFrom := c.Query("date_from")
 	dateTo := c.Query("date_to")
 	customerIDs := c.QueryArray("customer_id")
-	modelCodeSearch := c.Query("model_code")
+	modelCodeFrom := c.Query("model_code_from")
+	modelCodeTo := c.Query("model_code_to")
 	brandIDStrs := c.QueryArray("brand_id")
 	expectedFrom := c.Query("expected_from")
 	expectedTo := c.Query("expected_to")
@@ -143,8 +144,8 @@ func GetOrderOutstanding(c *gin.Context) {
 	if len(brandIDs) > 0 {
 		filterQuery = filterQuery.Where("products.brand_id IN ?", brandIDs)
 	}
-	if modelCodeSearch != "" {
-		filterQuery = filterQuery.Where("products.model_code ILIKE ?", "%"+modelCodeSearch+"%")
+	if frag, fargs := BuildModelCodeRangeWhere("products.model_code", modelCodeFrom, modelCodeTo); frag != "" {
+		filterQuery = filterQuery.Where(frag, fargs...)
 	}
 	if expectedFrom != "" {
 		filterQuery = filterQuery.Where("order_items.expected_date >= ?", expectedFrom)
@@ -270,12 +271,8 @@ func GetOrderOutstanding(c *gin.Context) {
 		})
 	}
 
-	// 7. 排序：對帳品牌 asc → 同品牌內商品型號 natural sort
+	// 7. 排序:商品型號 natural sort (對帳品牌分組已取消)
 	sort.SliceStable(sortable, func(i, j int) bool {
-		bi, bj := sortable[i].row.BrandName, sortable[j].row.BrandName
-		if bi != bj {
-			return bi < bj
-		}
 		return ModelCodeNaturalLess(sortable[i].row.ModelCode, sortable[j].row.ModelCode)
 	})
 

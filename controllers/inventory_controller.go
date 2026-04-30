@@ -2,7 +2,6 @@ package controllers
 
 import (
 	"fmt"
-	"math"
 	"project/models"
 	response "project/services/responses"
 	"strconv"
@@ -22,7 +21,7 @@ type inventoryRow struct {
 	SizeGroupCode     string             `json:"size_group_code"`
 	CostStart         float64            `json:"cost_start"`
 	TotalQty          int                `json:"total_qty"`
-	Amount            float64            `json:"amount"`
+	WholesaleTaxIncl  float64            `json:"wholesale_tax_incl"` // 批價(含稅,直接抓商品建檔值)
 	MSRP              float64            `json:"msrp"`
 	CreatedOn         string             `json:"created_on"`
 	Sizes             map[string]int     `json:"sizes"`
@@ -45,6 +44,7 @@ type inventoryRawRow struct {
 	SizeGroupID       int64   `gorm:"column:size_group_id"`
 	SizeGroupCode     string  `gorm:"column:size_group_code"`
 	CostStart         float64 `gorm:"column:cost_start"`
+	WholesaleTaxIncl  float64 `gorm:"column:wholesale_tax_incl"`
 	MSRP              float64 `gorm:"column:msrp"`
 	CreatedOn         string  `gorm:"column:created_on"`
 	SizeOptionID      int64   `gorm:"column:size_option_id"`
@@ -68,9 +68,9 @@ func GetInventory(c *gin.Context) {
 		where += " AND pss.customer_id = ?"
 		args = append(args, v)
 	}
-	if v := c.Query("model_code_search"); v != "" {
-		where += " AND p.model_code ILIKE ?"
-		args = append(args, "%"+strings.TrimSpace(v)+"%")
+	if frag, fargs := BuildModelCodeRangeWhere("p.model_code", c.Query("model_code_from"), c.Query("model_code_to")); frag != "" {
+		where += " AND " + frag
+		args = append(args, fargs...)
 	}
 	if v := c.Query("brand_ids"); v != "" {
 		ids := strings.Split(v, ",")
@@ -110,7 +110,8 @@ func GetInventory(c *gin.Context) {
 		}
 	}
 
-	// 單價 = 商品主檔「主要供應商」的 最後進價 (product_vendors.cost_last)
+	// 成本 = 商品主檔「主要供應商」的 最後進價 (product_vendors.cost_last)
+	// 批價 = 商品建檔含稅價 (products.wholesale_tax_incl)
 	sql := fmt.Sprintf(`
 SELECT
   pss.product_id,
@@ -121,6 +122,7 @@ SELECT
   COALESCE(sg.id, 0) as size_group_id,
   COALESCE(sg.code, '') as size_group_code,
   COALESCE(pv.cost_last, 0) as cost_start,
+  COALESCE(p.wholesale_tax_incl, 0) as wholesale_tax_incl,
   COALESCE(p.msrp, 0) as msrp,
   COALESCE(TO_CHAR(p.created_on, 'YYYYMMDD'), '') as created_on,
   pss.size_option_id,
@@ -175,6 +177,7 @@ ORDER BY %s, pss.customer_id, so.sort_order
 				SizeGroupID:       raw.SizeGroupID,
 				SizeGroupCode:     raw.SizeGroupCode,
 				CostStart:         raw.CostStart,
+				WholesaleTaxIncl:  raw.WholesaleTaxIncl,
 				MSRP:              raw.MSRP,
 				CreatedOn:         raw.CreatedOn,
 				Sizes:             map[string]int{},
@@ -216,7 +219,6 @@ ORDER BY %s, pss.customer_id, so.sort_order
 	allRows := make([]inventoryRow, 0, len(aggOrder))
 	for _, key := range aggOrder {
 		row := aggMap[key]
-		row.Amount = math.Round(row.CostStart * float64(row.TotalQty))
 		row.SizeOptions = sizeGroupOptionsMap[row.SizeGroupID]
 		if row.SizeOptions == nil {
 			row.SizeOptions = []inventorySizeCol{}
@@ -228,12 +230,11 @@ ORDER BY %s, pss.customer_id, so.sort_order
 	// summarySizes 以 sort_order 為 key（對齊 Excel 合計位置加總的行為）：
 	// UI 的尺碼欄是 active row 的段碼 options 依 sort_order 排列，合計列對應同 sort_order
 	// 欄位要加總所有段碼在該位置的 qty，不因翻頁 active row 段碼切換而變動。
+	// 批價是 per-product 屬性,不做合計。
 	summaryTotalQty := 0
-	summaryTotalAmount := 0.0
 	summarySizes := map[string]int{}
 	for _, r := range allRows {
 		summaryTotalQty += r.TotalQty
-		summaryTotalAmount += r.Amount
 	}
 	for _, raw := range rawRows {
 		if raw.Qty != 0 {
@@ -244,9 +245,8 @@ ORDER BY %s, pss.customer_id, so.sort_order
 	resp.Success("成功").SetData(map[string]interface{}{
 		"rows": allRows,
 		"summary": map[string]interface{}{
-			"total_qty":    summaryTotalQty,
-			"total_amount": math.Round(summaryTotalAmount),
-			"sizes":        summarySizes,
+			"total_qty": summaryTotalQty,
+			"sizes":     summarySizes,
 		},
 	}).SetTotal(int64(len(allRows))).Send()
 }

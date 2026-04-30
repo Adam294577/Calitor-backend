@@ -47,7 +47,7 @@ type productSalesSummaryRow struct {
 //
 // 查詢條件：
 //   - brand_ids：對帳品牌 (products.brand_id IN)
-//   - model_code：型號模糊 (ILIKE)
+//   - model_code_from / model_code_to：型號區間 (lex, case-insensitive)
 //   - branch_ids：庫點 / 店櫃 (retail_customers.id)
 //   - vendor_ids：廠商 (透過 product_vendors)
 //   - category1_ids ~ category5_ids：商品分類（透過 product_category_map）
@@ -61,7 +61,8 @@ func GetProductSalesSummary(c *gin.Context) {
 	defer db.Close()
 
 	// ---------- 參數解析 ----------
-	modelCode := strings.TrimSpace(c.Query("model_code"))
+	modelCodeFrom := c.Query("model_code_from")
+	modelCodeTo := c.Query("model_code_to")
 	brandIDs := splitNonEmpty(c.Query("brand_ids"))
 	branchIDs := splitNonEmpty(c.Query("branch_ids"))
 	vendorIDs := splitNonEmpty(c.Query("vendor_ids"))
@@ -113,9 +114,9 @@ func GetProductSalesSummary(c *gin.Context) {
 	where := "WHERE p.deleted_at IS NULL"
 	args := []interface{}{}
 
-	if modelCode != "" {
-		where += " AND p.model_code ILIKE ?"
-		args = append(args, "%"+modelCode+"%")
+	if frag, fargs := BuildModelCodeRangeWhere("p.model_code", modelCodeFrom, modelCodeTo); frag != "" {
+		where += " AND " + frag
+		args = append(args, fargs...)
 	}
 	if len(brandIDs) > 0 {
 		where += " AND p.brand_id IN (" + placeholders(len(brandIDs)) + ")"
