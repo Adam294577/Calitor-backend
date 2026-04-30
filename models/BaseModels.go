@@ -257,6 +257,25 @@ func MigrateAll(db *DBManager) error {
 		return err
 	}
 
+	// products.model_code 改為 partial unique index（軟刪除後可重建同型號）
+	if err := db.GetWrite().Exec(`
+		DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1 FROM pg_indexes
+				WHERE schemaname = current_schema()
+				  AND indexname = 'idx_products_model_code'
+				  AND indexdef ILIKE '%WHERE%deleted_at IS NULL%'
+				  AND indexdef ILIKE '%UNIQUE%'
+			) THEN
+				DROP INDEX IF EXISTS idx_products_model_code;
+				CREATE UNIQUE INDEX idx_products_model_code ON products (model_code) WHERE deleted_at IS NULL;
+			END IF;
+		END $$;
+	`).Error; err != nil {
+		return fmt.Errorf("建立 idx_products_model_code partial unique index 失敗: %w", err)
+	}
+
 	// 一次性重算庫存（清空 product_size_stocks 後從 stock/shipment/modify 重建）
 	if err := db.GetWrite().Transaction(func(tx *gorm.DB) error {
 		if err := tx.Exec("DELETE FROM product_size_stocks").Error; err != nil {

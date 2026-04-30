@@ -12,7 +12,7 @@ type Product struct {
 	CreatedAt         time.Time            `json:"created_at"`
 	UpdatedAt         time.Time            `json:"updated_at"`
 	DeletedAt         gorm.DeletedAt       `gorm:"index" json:"deleted_at"`
-	ModelCode         string               `gorm:"type:varchar(50);uniqueIndex;not null" json:"model_code"` // 型號
+	ModelCode         string               `gorm:"type:varchar(50);index;not null" json:"model_code"` // 型號（unique 由 partial index idx_products_model_code 處理，見 MigrateAll）
 	NameSpec          string               `gorm:"type:varchar(300)" json:"name_spec"`                      // 品名規格
 	Currency          string               `gorm:"type:varchar(20)" json:"currency"`                        // 幣別
 	ProductBrandId    *int64               `gorm:"index" json:"product_brand_id"`                           // 品牌 ID
