@@ -82,6 +82,9 @@ func GetProductSalesSummary(c *gin.Context) {
 		loc, _ := time.LoadLocation("Asia/Taipei")
 		dateTo = time.Now().In(loc).Format("20060102")
 	}
+	// 有意為之:dateTo 永遠有值 → 下方 EXISTS 過濾恆生效。
+	// 商品銷售總表只列「在 [dateFrom, dateTo] 範圍內、依 tx_type 曾有銷貨/出貨紀錄的商品」,
+	// 從未售出的「死碼」商品不會出現在列表中(見 2026-04-30 review 後端討論 #3 的決策)。
 
 	txType := strings.ToLower(c.DefaultQuery("tx_type", "all"))
 	switch txType {
