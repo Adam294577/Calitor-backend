@@ -249,7 +249,10 @@ func GetOrderOutstanding(c *gin.Context) {
 			continue
 		}
 
-		// order_price 一律為未稅，含稅合計需依稅率加稅（含稅/應稅模式皆然）
+		// 與前端逐筆 rowAmountTaxIncl 完全對齊:
+		//   `Math.round(qty * price * (1 + rate/100))` per row (tax_mode=2 應稅模式)
+		// order_price 一律為未稅(規範 #3),含稅/應稅兩模式都要 ×(1+rate/100)。
+		// 累加多筆時因每列已 round,sum 與「先加後 round」可能差 ±N(N=列數),屬於設計取捨,前後端一致。
 		amount := math.Round(float64(totalQty) * item.OrderPrice * (1 + order.TaxRate/100))
 
 		sortable = append(sortable, rowWithMeta{
