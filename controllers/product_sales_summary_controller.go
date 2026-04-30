@@ -148,6 +148,46 @@ func GetProductSalesSummary(c *gin.Context) {
 		where += " AND p.trade_mode = 2"
 	}
 
+	// 銷售/出貨範圍過濾:只列在 [dateFrom, dateTo] 內、tx_type 對應的表中有此 product_id 的商品
+	if dateFrom != "" || dateTo != "" {
+		exists := []string{}
+		if txType == "all" || txType == "sell" {
+			cond := "EXISTS (SELECT 1 FROM retail_sell_items rsi JOIN retail_sells rs ON rs.id = rsi.retail_sell_id AND rs.deleted_at IS NULL WHERE rsi.product_id = p.id"
+			if dateFrom != "" {
+				cond += " AND rs.sell_date >= ?"
+				args = append(args, dateFrom)
+			}
+			if dateTo != "" {
+				cond += " AND rs.sell_date <= ?"
+				args = append(args, dateTo)
+			}
+			cond += ")"
+			exists = append(exists, cond)
+		}
+		if txType == "all" || txType == "shipment" {
+			cond := "EXISTS (SELECT 1 FROM shipment_items shi JOIN shipments sh ON sh.id = shi.shipment_id AND sh.deleted_at IS NULL WHERE shi.product_id = p.id"
+			if dateFrom != "" {
+				cond += " AND sh.shipment_date >= ?"
+				args = append(args, dateFrom)
+			}
+			if dateTo != "" {
+				cond += " AND sh.shipment_date <= ?"
+				args = append(args, dateTo)
+			}
+			switch tradeType {
+			case "purchase":
+				cond += " AND sh.deal_mode = 1"
+			case "consignment":
+				cond += " AND sh.deal_mode = 2"
+			}
+			cond += ")"
+			exists = append(exists, cond)
+		}
+		if len(exists) > 0 {
+			where += " AND (" + strings.Join(exists, " OR ") + ")"
+		}
+	}
+
 	// 總筆數
 	var total int64
 	countSQL := "SELECT COUNT(*) FROM products p " + where
