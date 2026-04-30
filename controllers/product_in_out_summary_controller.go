@@ -99,9 +99,10 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 	kinds := splitNonEmpty(c.Query("kinds"))
 	if dateFrom != "" || dateTo != "" {
 		if len(kinds) == 0 {
+			// 前端必傳 kinds(filterKinds.length 永不為 0),後端 fallback 帶全套保險
 			kinds = []string{"stock", "shipment", "retail_sell", "modify", "transfer_in", "transfer_out", "order", "purchase"}
 		}
-		// 每種 kind 對應的 (header table, item table, item.product_id 欄, 日期欄)
+		// 每種 kind 對應的 (header table, item table, header 業務日期欄)
 		kindMap := map[string][3]string{
 			"stock":        {"stocks", "stock_items", "stock_date"},
 			"shipment":     {"shipments", "shipment_items", "shipment_date"},
@@ -112,7 +113,7 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 			"order":        {"orders", "order_items", "order_date"},
 			"purchase":     {"purchases", "purchase_items", "purchase_date"},
 		}
-		// header_table 的 PK 欄位都是 id;item table 的 FK 欄位需要對齊
+		// item table 的 FK 欄位
 		fkMap := map[string]string{
 			"stocks":       "stock_id",
 			"shipments":    "shipment_id",
@@ -122,6 +123,9 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 			"orders":       "order_id",
 			"purchases":    "purchase_id",
 		}
+		// transfer_in / transfer_out 在 transfer_items 沒有方向欄,
+		// 商品列表階段「有 transfer 即可」,兩個方向都映射到同一張 transfers 查一次。
+		// 真正的方向 (調入/調出) 在 Tab 2 (商品進出明細) 才會展開。
 		seen := map[string]bool{}
 		exists := []string{}
 		for _, k := range kinds {
@@ -129,7 +133,6 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 			if !ok {
 				continue
 			}
-			// transfer_in / transfer_out 都查 transfers,避免重複 EXISTS
 			key := cfg[0] + "|" + cfg[1]
 			if seen[key] {
 				continue
@@ -137,19 +140,33 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 			seen[key] = true
 			header, item, dateCol := cfg[0], cfg[1], cfg[2]
 			fk := fkMap[header]
-			cond := fmt.Sprintf(
-				"EXISTS (SELECT 1 FROM %[2]s xi JOIN %[1]s xh ON xh.id = xi.%[3]s AND xh.deleted_at IS NULL WHERE xi.product_id = p.id",
-				header, item, fk,
-			)
+			// 規範 #1 雙路徑:業務日期 OR ChangeDate(updated_at)。
+			// Sell/Stock/Purchase/Orders/Ship/Goods/Modify/Transfer 都可能事後改動,
+			// 只比對業務日期會漏抓「日期被改成範圍外、但確實在此範圍內被異動過」的單。
+			bizParts := []string{}
+			chgParts := []string{}
+			localArgs := []interface{}{}
+			chgArgs := []interface{}{}
 			if dateFrom != "" {
-				cond += fmt.Sprintf(" AND xh.%s >= ?", dateCol)
-				args = append(args, dateFrom)
+				bizParts = append(bizParts, fmt.Sprintf("xh.%s >= ?", dateCol))
+				localArgs = append(localArgs, dateFrom)
+				chgParts = append(chgParts, "TO_CHAR(xh.updated_at, 'YYYYMMDD') >= ?")
+				chgArgs = append(chgArgs, dateFrom)
 			}
 			if dateTo != "" {
-				cond += fmt.Sprintf(" AND xh.%s <= ?", dateCol)
-				args = append(args, dateTo)
+				bizParts = append(bizParts, fmt.Sprintf("xh.%s <= ?", dateCol))
+				localArgs = append(localArgs, dateTo)
+				chgParts = append(chgParts, "TO_CHAR(xh.updated_at, 'YYYYMMDD') <= ?")
+				chgArgs = append(chgArgs, dateTo)
 			}
-			cond += ")"
+			cond := fmt.Sprintf(
+				"EXISTS (SELECT 1 FROM %[2]s xi JOIN %[1]s xh ON xh.id = xi.%[3]s AND xh.deleted_at IS NULL WHERE xi.product_id = p.id AND ((%[4]s) OR (%[5]s)))",
+				header, item, fk,
+				strings.Join(bizParts, " AND "),
+				strings.Join(chgParts, " AND "),
+			)
+			args = append(args, localArgs...)
+			args = append(args, chgArgs...)
 			exists = append(exists, cond)
 		}
 		if len(exists) > 0 {
