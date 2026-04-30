@@ -84,6 +84,14 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 		where += " AND TO_CHAR(p.created_on, 'YYYYMMDD') = ?"
 		args = append(args, v)
 	}
+	if v := c.Query("created_on_from"); v != "" {
+		where += " AND TO_CHAR(p.created_on, 'YYYYMMDD') >= ?"
+		args = append(args, v)
+	}
+	if v := c.Query("created_on_to"); v != "" {
+		where += " AND TO_CHAR(p.created_on, 'YYYYMMDD') <= ?"
+		args = append(args, v)
+	}
 
 	sql := fmt.Sprintf(`
 SELECT
