@@ -84,9 +84,9 @@ func modelCodeNaturalKey(s string) (string, int64, string, int64) {
 
 // BuildModelCodeRangeWhere 產生 model_code 區間查詢的 WHERE 片段 (lex 字典序、case-insensitive)。
 //   from + to 都有 → [from, to]
-//   只有 from → [from, "zzz"] (迄補 zzz 當 max,等同開放上界)
-//   只有 to   → ["",   to]    (起為空字串,等同開放下界)
-//   兩個都空 → 回傳 ("", nil),caller 自行略過
+//   只有 from      → 開放上界 (UPPER(col) >= UPPER(from))
+//   只有 to        → 開放下界 (UPPER(col) <= UPPER(to))
+//   兩個都空       → 回傳 ("", nil),caller 自行略過
 //
 // 注意:過濾用 lex,排序仍用 ModelCodeOrderBy 自然序。兩者刻意分離。
 //
@@ -106,11 +106,17 @@ func BuildModelCodeRangeWhere(col, from, to string) (string, []interface{}) {
 	if from == "" && to == "" {
 		return "", nil
 	}
-	if to == "" {
-		to = "zzz"
+	conds := make([]string, 0, 2)
+	args := make([]interface{}, 0, 2)
+	if from != "" {
+		conds = append(conds, fmt.Sprintf("UPPER(%s) >= UPPER(?)", col))
+		args = append(args, from)
 	}
-	return fmt.Sprintf("UPPER(%s) >= UPPER(?) AND UPPER(%s) <= UPPER(?)", col, col),
-		[]interface{}{from, to}
+	if to != "" {
+		conds = append(conds, fmt.Sprintf("UPPER(%s) <= UPPER(?)", col))
+		args = append(args, to)
+	}
+	return strings.Join(conds, " AND "), args
 }
 
 // MatchModelCodeRange 應用層判斷 code 是否落在 [from, to] 區間內,規則同 BuildModelCodeRangeWhere。
@@ -121,9 +127,12 @@ func MatchModelCodeRange(code, from, to string) bool {
 	if from == "" && to == "" {
 		return true
 	}
-	if to == "" {
-		to = "zzz"
-	}
 	u := strings.ToUpper(code)
-	return u >= strings.ToUpper(from) && u <= strings.ToUpper(to)
+	if from != "" && u < strings.ToUpper(from) {
+		return false
+	}
+	if to != "" && u > strings.ToUpper(to) {
+		return false
+	}
+	return true
 }
