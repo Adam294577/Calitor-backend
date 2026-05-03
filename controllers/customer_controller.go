@@ -3,11 +3,13 @@ package controllers
 import (
 	"net/http"
 	"project/models"
+	"project/services/permission"
 	response "project/services/responses"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 func GetCustomers(c *gin.Context) {
@@ -19,8 +21,14 @@ func GetCustomers(c *gin.Context) {
 	defer db.Close()
 
 	var items []models.RetailCustomer
-	query := db.GetRead().Preload("Location").Order("id ASC")
-	query = ApplySearch(query, c.Query("search"), "code", "name", "short_name")
+	search := c.Query("search")
+	query := db.GetRead().Preload("Location")
+	if search != "" {
+		// code 前綴匹配優先 (例:輸入 90 時,9005/9021 排在 1906/1907 前)
+		query = query.Order(gorm.Expr("CASE WHEN code ILIKE ? THEN 0 ELSE 1 END", search+"%"))
+	}
+	query = query.Order(ModelCodeOrderBy("code"))
+	query = ApplySearch(query, search, "code", "name", "short_name")
 	if locId := c.Query("location_id"); locId != "" {
 		query = query.Where("location_id = ?", locId)
 	}
@@ -40,21 +48,24 @@ func GetCustomerOptions(c *gin.Context) {
 	defer db.Close()
 
 	type option struct {
-		ID              int64  `json:"id"`
-		Code            string `json:"code"`
-		Name            string `json:"name"`
-		ShortName       string `json:"short_name"`
-		BranchCode      string `json:"branch_code"`
-		ClosingDate     int    `json:"closing_date"`
-		Phone1          string `json:"phone1"`
-		ShippingAddress string `json:"shipping_address"`
-		SalesmanID      *int64 `json:"salesman_id"`
+		ID              int64   `json:"id"`
+		Code            string  `json:"code"`
+		Name            string  `json:"name"`
+		ShortName       string  `json:"short_name"`
+		BranchCode      string  `json:"branch_code"`
+		ClosingDate     int     `json:"closing_date"`
+		Phone1          string  `json:"phone1"`
+		ShippingAddress string  `json:"shipping_address"`
+		SalesmanID      *int64  `json:"salesman_id"`
+		Discount        int     `json:"discount"`
+		TaxMode         int     `json:"tax_mode"`
+		TaxRate         float64 `json:"tax_rate"`
 	}
 	var items []option
 	db.GetRead().Model(&models.RetailCustomer{}).
-		Select("id, code, name, short_name, branch_code, closing_date, phone1, shipping_address, salesman_id").
+		Select("id, code, name, short_name, branch_code, closing_date, phone1, shipping_address, salesman_id, discount, tax_mode, tax_rate").
 		Where("is_visible = ?", true).
-		Order("id ASC").
+		Order(ModelCodeOrderBy("code")).
 		Find(&items)
 	setListCache(c, items, 0)
 	resp.Success("成功").SetData(items).Send()
@@ -123,6 +134,7 @@ func UpdateCustomer(c *gin.Context) {
 		TaxId              *string  `json:"tax_id"`
 		InvoiceName        *string  `json:"invoice_name"`
 		TaxRate            *float64 `json:"tax_rate"`
+		TaxMode            *int     `json:"tax_mode"`
 		Discount           *int     `json:"discount"`
 		CreatedDate        *string  `json:"created_date"`
 		CreditLimit        *float64 `json:"credit_limit"`
@@ -145,6 +157,9 @@ func UpdateCustomer(c *gin.Context) {
 		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
 		return
 	}
+
+	// 無「編輯主檔代碼」權限者，忽略 code 欄位變更
+	permission.StripMasterCodeFields(c, &req, "code")
 
 	// 檢查 code 唯一性
 	if req.Code != nil && *req.Code != "" && *req.Code != existing.Code {

@@ -2,11 +2,13 @@ package controllers
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"project/models"
 	"project/services/delivery"
 	"project/services/inventory"
 	response "project/services/responses"
+	stocksvc "project/services/stock"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -26,17 +28,17 @@ func GetStocks(c *gin.Context) {
 		Preload("FillPerson").
 		Preload("Recorder").
 		Preload("Purchase").
-		Order("stock_date DESC, id DESC")
+		Order("stock_date DESC, stock_no DESC")
 
 	// 進貨單號搜尋
 	if v := c.Query("search"); v != "" {
 		query = ApplySearch(query, v, "stock_no")
 	}
 
-	// 廠商單號搜尋（透過關聯 Purchase）
-	if v := c.Query("purchase_no"); v != "" {
+	// 廠商單號搜尋（文字備註欄位 vendor_stock_no）
+	if v := c.Query("vendor_stock_no"); v != "" {
 		like := "%" + v + "%"
-		query = query.Where("purchase_id IN (SELECT id FROM purchases WHERE deleted_at IS NULL AND purchase_no ILIKE ?)", like)
+		query = query.Where("vendor_stock_no ILIKE ?", like)
 	}
 
 	if v := c.Query("customer_id"); v != "" {
@@ -106,7 +108,35 @@ func GetStock(c *gin.Context) {
 		resp.Fail(http.StatusNotFound, "進貨單不存在").Send()
 		return
 	}
-	resp.Success("成功").SetData(item).Send()
+
+	// 查每筆 StockItem 對應的 purchase_no（透過 PurchaseItem → Purchase）
+	type purchaseRef struct {
+		PurchaseItemID int64
+		PurchaseNo     string
+	}
+	var purchaseItemIDs []int64
+	for _, si := range item.Items {
+		if si.PurchaseItemID != nil {
+			purchaseItemIDs = append(purchaseItemIDs, *si.PurchaseItemID)
+		}
+	}
+	purchaseNoMap := map[int64]string{}
+	if len(purchaseItemIDs) > 0 {
+		var refs []purchaseRef
+		db.GetRead().Model(&models.PurchaseItem{}).
+			Select("purchase_items.id as purchase_item_id, purchases.purchase_no").
+			Joins("JOIN purchases ON purchases.id = purchase_items.purchase_id AND purchases.deleted_at IS NULL").
+			Where("purchase_items.id IN ?", purchaseItemIDs).
+			Scan(&refs)
+		for _, r := range refs {
+			purchaseNoMap[r.PurchaseItemID] = r.PurchaseNo
+		}
+	}
+
+	resp.Success("成功").SetData(map[string]interface{}{
+		"stock":           item,
+		"purchase_no_map": purchaseNoMap,
+	}).Send()
 }
 
 // CreateStock 新增進貨單
@@ -120,9 +150,9 @@ func CreateStock(c *gin.Context) {
 		CustomerID      int64   `json:"customer_id" binding:"required"`
 		VendorID        int64   `json:"vendor_id" binding:"required"`
 		PurchaseID      *int64  `json:"purchase_id"`
+		VendorStockNo   string  `json:"vendor_stock_no"`
 		StockMode       int     `json:"stock_mode"`
 		DealMode        int     `json:"deal_mode"`
-		CurrencyCode    string  `json:"currency_code"`
 		FillPersonID    *int64  `json:"fill_person_id"`
 		CloseMonth      string  `json:"close_month"`
 		Remark          string  `json:"remark"`
@@ -135,6 +165,7 @@ func CreateStock(c *gin.Context) {
 		InvoiceNo       string  `json:"invoice_no"`
 		InvoiceAmount   float64 `json:"invoice_amount"`
 		ChargeAmount    float64 `json:"charge_amount"`
+		InputMode       int     `json:"input_mode"`
 		Items           []struct {
 			ProductID      int64   `json:"product_id"`
 			SizeGroupID    *int64  `json:"size_group_id"`
@@ -217,15 +248,19 @@ func CreateStock(c *gin.Context) {
 		recorderID = int64(id)
 	}
 
+	inputMode := req.InputMode
+	if inputMode == 0 {
+		inputMode = models.StockInputModeKeyboard // 此 endpoint 為鍵盤輸入路徑
+	}
 	stock := models.Stock{
 		StockNo:         stockNo,
 		StockDate:       req.StockDate,
 		CustomerID:      req.CustomerID,
 		VendorID:        req.VendorID,
 		PurchaseID:      req.PurchaseID,
+		VendorStockNo:   req.VendorStockNo,
 		StockMode:       req.StockMode,
 		DealMode:        req.DealMode,
-		CurrencyCode:    req.CurrencyCode,
 		FillPersonID:    req.FillPersonID,
 		RecorderID:      recorderID,
 		CloseMonth:      closeMonth,
@@ -239,6 +274,7 @@ func CreateStock(c *gin.Context) {
 		InvoiceNo:       req.InvoiceNo,
 		InvoiceAmount:   req.InvoiceAmount,
 		ChargeAmount:    req.ChargeAmount,
+		InputMode:       inputMode,
 	}
 
 	err := db.GetWrite().Transaction(func(tx *gorm.DB) error {
@@ -250,7 +286,7 @@ func CreateStock(c *gin.Context) {
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
 			}
-			totalAmount := float64(totalQty) * reqItem.PurchasePrice
+			totalAmount := math.Round(float64(totalQty) * reqItem.PurchasePrice)
 
 			item := models.StockItem{
 				StockID:        stock.ID,
@@ -302,11 +338,19 @@ func CreateStock(c *gin.Context) {
 			return err
 		}
 
-		// 更新關聯採購單交貨狀態
-		if stock.PurchaseID != nil {
-			if err := delivery.UpdateDeliveryStatus(tx, *stock.PurchaseID); err != nil {
-				return err
+		// 更新關聯採購單交貨狀態：收集所有 items[].purchase_item_id 對應的 purchase_id 集合
+		var newItemIDs []int64
+		for _, reqItem := range req.Items {
+			if reqItem.PurchaseItemID != nil {
+				newItemIDs = append(newItemIDs, *reqItem.PurchaseItemID)
 			}
+		}
+		purchaseIDs := stocksvc.DistinctPurchaseIDs(tx, newItemIDs)
+		if stock.PurchaseID != nil {
+			purchaseIDs = append(purchaseIDs, *stock.PurchaseID)
+		}
+		if err := stocksvc.RecalcPurchasesDeliveryStatus(tx, purchaseIDs); err != nil {
+			return err
 		}
 
 		return nil
@@ -342,9 +386,9 @@ func UpdateStock(c *gin.Context) {
 		CustomerID      int64   `json:"customer_id"`
 		VendorID        int64   `json:"vendor_id"`
 		PurchaseID      *int64  `json:"purchase_id"`
+		VendorStockNo   string  `json:"vendor_stock_no"`
 		StockMode       int     `json:"stock_mode"`
 		DealMode        int     `json:"deal_mode"`
-		CurrencyCode    string  `json:"currency_code"`
 		FillPersonID    *int64  `json:"fill_person_id"`
 		CloseMonth      string  `json:"close_month"`
 		Remark          string  `json:"remark"`
@@ -378,8 +422,16 @@ func UpdateStock(c *gin.Context) {
 		return
 	}
 
-	// 記錄舊的 PurchaseID，更新後可能需要同時更新兩張採購單狀態
+	// 記錄舊的 PurchaseID 與舊 items 的 PurchaseItemIDs，更新後要對所有涉及的採購單重算
 	oldPurchaseID := existing.PurchaseID
+	var oldItemsForDelivery []models.StockItem
+	db.GetRead().Select("id", "purchase_item_id").Where("stock_id = ?", id).Find(&oldItemsForDelivery)
+	var oldPurchaseItemIDs []int64
+	for _, oi := range oldItemsForDelivery {
+		if oi.PurchaseItemID != nil {
+			oldPurchaseItemIDs = append(oldPurchaseItemIDs, *oi.PurchaseItemID)
+		}
+	}
 
 	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
 		// 還原舊庫存
@@ -436,9 +488,9 @@ func UpdateStock(c *gin.Context) {
 			"customer_id":      req.CustomerID,
 			"vendor_id":        req.VendorID,
 			"purchase_id":      req.PurchaseID,
+			"vendor_stock_no":  req.VendorStockNo,
 			"stock_mode":       req.StockMode,
 			"deal_mode":        req.DealMode,
-			"currency_code":    req.CurrencyCode,
 			"fill_person_id":   req.FillPersonID,
 			"recorder_id":      recorderID,
 			"close_month":      req.CloseMonth,
@@ -463,7 +515,7 @@ func UpdateStock(c *gin.Context) {
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
 			}
-			totalAmount := float64(totalQty) * reqItem.PurchasePrice
+			totalAmount := math.Round(float64(totalQty) * reqItem.PurchasePrice)
 
 			item := models.StockItem{
 				StockID:        id,
@@ -515,16 +567,22 @@ func UpdateStock(c *gin.Context) {
 			return err
 		}
 
-		// 更新關聯採購單交貨狀態
-		if req.PurchaseID != nil {
-			if err := delivery.UpdateDeliveryStatus(tx, *req.PurchaseID); err != nil {
-				return err
+		// 更新關聯採購單交貨狀態：收集舊 items 與新 items 的 purchase_id 聯集
+		var newPurchaseItemIDs []int64
+		for _, reqItem := range req.Items {
+			if reqItem.PurchaseItemID != nil {
+				newPurchaseItemIDs = append(newPurchaseItemIDs, *reqItem.PurchaseItemID)
 			}
 		}
-		if oldPurchaseID != nil && (req.PurchaseID == nil || *oldPurchaseID != *req.PurchaseID) {
-			if err := delivery.UpdateDeliveryStatus(tx, *oldPurchaseID); err != nil {
-				return err
-			}
+		affectedPurchaseIDs := stocksvc.DistinctPurchaseIDs(tx, append(oldPurchaseItemIDs, newPurchaseItemIDs...))
+		if oldPurchaseID != nil {
+			affectedPurchaseIDs = append(affectedPurchaseIDs, *oldPurchaseID)
+		}
+		if req.PurchaseID != nil {
+			affectedPurchaseIDs = append(affectedPurchaseIDs, *req.PurchaseID)
+		}
+		if err := stocksvc.RecalcPurchasesDeliveryStatus(tx, affectedPurchaseIDs); err != nil {
+			return err
 		}
 
 		return nil
@@ -584,14 +642,24 @@ func DeleteStock(c *gin.Context) {
 			}
 		}
 
+		// 刪除前先收集本單 items 涉及的 purchase_item_id
+		var oldPurchaseItemIDs []int64
+		for _, si := range stockItems {
+			if si.PurchaseItemID != nil {
+				oldPurchaseItemIDs = append(oldPurchaseItemIDs, *si.PurchaseItemID)
+			}
+		}
+
 		if err := tx.Delete(&models.Stock{}, id).Error; err != nil {
 			return err
 		}
-		// 更新關聯採購單交貨狀態
+		// 更新關聯採購單交貨狀態：items 涉及的 purchase_id 集合 + 舊 header 的 PurchaseID
+		affectedPurchaseIDs := stocksvc.DistinctPurchaseIDs(tx, oldPurchaseItemIDs)
 		if stock.PurchaseID != nil {
-			if err := delivery.UpdateDeliveryStatus(tx, *stock.PurchaseID); err != nil {
-				return err
-			}
+			affectedPurchaseIDs = append(affectedPurchaseIDs, *stock.PurchaseID)
+		}
+		if err := stocksvc.RecalcPurchasesDeliveryStatus(tx, affectedPurchaseIDs); err != nil {
+			return err
 		}
 		return nil
 	})

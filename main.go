@@ -11,6 +11,7 @@ import (
 	"project/middlewares"
 	"project/models"
 	"project/routes"
+	"project/services/firewall"
 	"project/services/log"
 	"project/services/redis"
 	response "project/services/responses"
@@ -73,6 +74,10 @@ func initConfig() {
 		// 找不到設定檔時僅靠環境變數運作（適用於容器部署）
 		fmt.Printf("⚠ 未載入設定檔（%s），將完全使用環境變數\n", config)
 	}
+
+	// 安全關鍵設定明確 BindEnv,避免 viper 對巢狀 key 的 AutomaticEnv 在不同版本行為不一致
+	// 確保 SERVER_SECURITY_ALLOWEDOFFICEIP 一定能覆蓋 YAML 的同名欄位
+	_ = viper.BindEnv("Server.Security.AllowedOfficeIP", "SERVER_SECURITY_ALLOWEDOFFICEIP")
 }
 
 var HttpServer *gin.Engine
@@ -109,6 +114,9 @@ func App(HttpServer *gin.Engine) {
 		fmt.Println("⏭ 略過資料表遷移與 Seed（設定 RUN_MIGRATE=true 以啟用）")
 	}
 
+	// 每次啟動都同步環境變數 IP 到 firewall_ips 表（env 仍為 source of truth）
+	models.SyncEnvFirewallIPs(db)
+
 	// 一次性遷移：將 role_permissions 中的父節點展開為葉子節點
 	// models.MigrateRolePermissionsToLeaf(db)
 
@@ -140,6 +148,11 @@ func App(HttpServer *gin.Engine) {
 	} else {
 		fmt.Println("⚠ MinIO 檔案儲存功能未啟用")
 	}
+
+	// 清除 firewall 白名單的 Redis 殘留快取:redeploy 後若 Redis 仍持有上次部屬的 snapshot,
+	// 新加入 env 的合法 IP 會被舊 cache 擋下最多 5 分鐘 (cacheTTL)。SyncEnvFirewallIPs 已寫入 DB,
+	// 這裡確保下次 Load() 必定 cache miss → 重新從 DB 取得最新白名單。
+	firewall.Invalidate()
 
 	// 啟動Gin服務
 	HttpServer = gin.Default()

@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"project/models"
 	"project/services/inventory"
@@ -193,7 +194,7 @@ func CreateTransfer(c *gin.Context) {
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
 			}
-			totalAmount := float64(totalQty) * reqItem.UnitPrice
+			totalAmount := math.Round(float64(totalQty) * reqItem.UnitPrice)
 
 			item := models.TransferItem{
 				TransferID:     transfer.ID,
@@ -277,10 +278,6 @@ func UpdateTransfer(c *gin.Context) {
 	var existing models.Transfer
 	if err := db.GetRead().Where("id = ?", id).First(&existing).Error; err != nil {
 		resp.Fail(http.StatusNotFound, "調撥單不存在").Send()
-		return
-	}
-	if existing.Confirmed {
-		resp.Fail(http.StatusForbidden, "已確認的調撥單不可修改").Send()
 		return
 	}
 
@@ -387,12 +384,12 @@ func UpdateTransfer(c *gin.Context) {
 		}
 
 		updates := map[string]interface{}{
-			"transfer_date":     req.TransferDate,
-			"source_store":      req.SourceStore,
+			"transfer_date":      req.TransferDate,
+			"source_store":       req.SourceStore,
 			"source_customer_id": sourceCustomer.ID,
-			"fill_person_id":    req.FillPersonID,
-			"recorder_id":       recorderID,
-			"remark":            req.Remark,
+			"fill_person_id":     req.FillPersonID,
+			"recorder_id":        recorderID,
+			"remark":             req.Remark,
 		}
 		if err := tx.Model(&existing).Updates(updates).Error; err != nil {
 			return err
@@ -409,7 +406,7 @@ func UpdateTransfer(c *gin.Context) {
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
 			}
-			totalAmount := float64(totalQty) * reqItem.UnitPrice
+			totalAmount := math.Round(float64(totalQty) * reqItem.UnitPrice)
 
 			item := models.TransferItem{
 				TransferID:     id,
@@ -490,10 +487,6 @@ func DeleteTransfer(c *gin.Context) {
 	var transfer models.Transfer
 	if err := db.GetRead().Where("id = ?", id).First(&transfer).Error; err != nil {
 		resp.Fail(http.StatusNotFound, "調撥單不存在").Send()
-		return
-	}
-	if transfer.Confirmed {
-		resp.Fail(http.StatusForbidden, "已確認的調撥單不可刪除").Send()
 		return
 	}
 

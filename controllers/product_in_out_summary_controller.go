@@ -55,9 +55,9 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 	where := "WHERE p.deleted_at IS NULL AND p.is_visible = true"
 	args := []interface{}{}
 
-	if v := c.Query("model_code"); v != "" {
-		where += " AND p.model_code ILIKE ?"
-		args = append(args, "%"+v+"%")
+	if frag, fargs := BuildModelCodeRangeWhere("p.model_code", c.Query("model_code_from"), c.Query("model_code_to")); frag != "" {
+		where += " AND " + frag
+		args = append(args, fargs...)
 	}
 	if v := c.Query("brand_ids"); v != "" {
 		ids := splitNonEmpty(v)
@@ -84,6 +84,95 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 		where += " AND TO_CHAR(p.created_on, 'YYYYMMDD') = ?"
 		args = append(args, v)
 	}
+	if v := c.Query("created_on_from"); v != "" {
+		where += " AND TO_CHAR(p.created_on, 'YYYYMMDD') >= ?"
+		args = append(args, v)
+	}
+	if v := c.Query("created_on_to"); v != "" {
+		where += " AND TO_CHAR(p.created_on, 'YYYYMMDD') <= ?"
+		args = append(args, v)
+	}
+
+	// 異動範圍過濾:只列在 [date_from, date_to] 內、且符合所選 kinds 至少一種異動的商品
+	dateFrom := c.Query("date_from")
+	dateTo := c.Query("date_to")
+	kinds := splitNonEmpty(c.Query("kinds"))
+	if dateFrom != "" || dateTo != "" {
+		if len(kinds) == 0 {
+			// 前端必傳 kinds(filterKinds.length 永不為 0),後端 fallback 帶全套保險
+			kinds = []string{"stock", "shipment", "retail_sell", "modify", "transfer_in", "transfer_out", "order", "purchase"}
+		}
+		// 每種 kind 對應的 (header table, item table, header 業務日期欄)
+		kindMap := map[string][3]string{
+			"stock":        {"stocks", "stock_items", "stock_date"},
+			"shipment":     {"shipments", "shipment_items", "shipment_date"},
+			"retail_sell":  {"retail_sells", "retail_sell_items", "sell_date"},
+			"modify":       {"modifies", "modify_items", "modify_date"},
+			"transfer_in":  {"transfers", "transfer_items", "transfer_date"},
+			"transfer_out": {"transfers", "transfer_items", "transfer_date"},
+			"order":        {"orders", "order_items", "order_date"},
+			"purchase":     {"purchases", "purchase_items", "purchase_date"},
+		}
+		// item table 的 FK 欄位
+		fkMap := map[string]string{
+			"stocks":       "stock_id",
+			"shipments":    "shipment_id",
+			"retail_sells": "retail_sell_id",
+			"modifies":     "modify_id",
+			"transfers":    "transfer_id",
+			"orders":       "order_id",
+			"purchases":    "purchase_id",
+		}
+		// transfer_in / transfer_out 在 transfer_items 沒有方向欄,
+		// 商品列表階段「有 transfer 即可」,兩個方向都映射到同一張 transfers 查一次。
+		// 真正的方向 (調入/調出) 在 Tab 2 (商品進出明細) 才會展開。
+		seen := map[string]bool{}
+		exists := []string{}
+		for _, k := range kinds {
+			cfg, ok := kindMap[k]
+			if !ok {
+				continue
+			}
+			key := cfg[0] + "|" + cfg[1]
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			header, item, dateCol := cfg[0], cfg[1], cfg[2]
+			fk := fkMap[header]
+			// 規範 #1 雙路徑:業務日期 OR ChangeDate(updated_at)。
+			// Sell/Stock/Purchase/Orders/Ship/Goods/Modify/Transfer 都可能事後改動,
+			// 只比對業務日期會漏抓「日期被改成範圍外、但確實在此範圍內被異動過」的單。
+			bizParts := []string{}
+			chgParts := []string{}
+			localArgs := []interface{}{}
+			chgArgs := []interface{}{}
+			if dateFrom != "" {
+				bizParts = append(bizParts, fmt.Sprintf("xh.%s >= ?", dateCol))
+				localArgs = append(localArgs, dateFrom)
+				chgParts = append(chgParts, "TO_CHAR(xh.updated_at, 'YYYYMMDD') >= ?")
+				chgArgs = append(chgArgs, dateFrom)
+			}
+			if dateTo != "" {
+				bizParts = append(bizParts, fmt.Sprintf("xh.%s <= ?", dateCol))
+				localArgs = append(localArgs, dateTo)
+				chgParts = append(chgParts, "TO_CHAR(xh.updated_at, 'YYYYMMDD') <= ?")
+				chgArgs = append(chgArgs, dateTo)
+			}
+			cond := fmt.Sprintf(
+				"EXISTS (SELECT 1 FROM %[2]s xi JOIN %[1]s xh ON xh.id = xi.%[3]s AND xh.deleted_at IS NULL WHERE xi.product_id = p.id AND ((%[4]s) OR (%[5]s)))",
+				header, item, fk,
+				strings.Join(bizParts, " AND "),
+				strings.Join(chgParts, " AND "),
+			)
+			args = append(args, localArgs...)
+			args = append(args, chgArgs...)
+			exists = append(exists, cond)
+		}
+		if len(exists) > 0 {
+			where += " AND (" + strings.Join(exists, " OR ") + ")"
+		}
+	}
 
 	sql := fmt.Sprintf(`
 SELECT
@@ -100,9 +189,8 @@ LEFT JOIN size_groups sg ON sg.id = p.size1_group_id
 LEFT JOIN product_vendors pv ON pv.product_id = p.id AND pv.is_primary = true
 LEFT JOIN vendors v ON v.id = pv.vendor_id
 %s
-ORDER BY p.created_on DESC NULLS LAST, p.model_code
-LIMIT 500
-`, where)
+ORDER BY %s
+`, where, ModelCodeOrderBy("p.model_code"))
 
 	var rows []productSummaryRow
 	if err := db.GetRead().Raw(sql, args...).Scan(&rows).Error; err != nil {

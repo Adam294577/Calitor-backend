@@ -2,7 +2,6 @@ package controllers
 
 import (
 	"fmt"
-	"math"
 	"project/models"
 	response "project/services/responses"
 	"strconv"
@@ -15,13 +14,14 @@ import (
 type inventoryRow struct {
 	ProductID         int64              `json:"product_id"`
 	ModelCode         string             `json:"model_code"`
+	NameSpec          string             `json:"name_spec"`
 	CustomerID        int64              `json:"customer_id"`
 	CustomerShortName string             `json:"customer_short_name"`
 	SizeGroupID       int64              `json:"size_group_id"`
 	SizeGroupCode     string             `json:"size_group_code"`
 	CostStart         float64            `json:"cost_start"`
 	TotalQty          int                `json:"total_qty"`
-	Amount            float64            `json:"amount"`
+	WholesaleTaxIncl  float64            `json:"wholesale_tax_incl"` // 批價(含稅,直接抓商品建檔值)
 	MSRP              float64            `json:"msrp"`
 	CreatedOn         string             `json:"created_on"`
 	Sizes             map[string]int     `json:"sizes"`
@@ -38,11 +38,13 @@ type inventorySizeCol struct {
 type inventoryRawRow struct {
 	ProductID         int64   `gorm:"column:product_id"`
 	ModelCode         string  `gorm:"column:model_code"`
+	NameSpec          string  `gorm:"column:name_spec"`
 	CustomerID        int64   `gorm:"column:customer_id"`
 	CustomerShortName string  `gorm:"column:customer_short_name"`
 	SizeGroupID       int64   `gorm:"column:size_group_id"`
 	SizeGroupCode     string  `gorm:"column:size_group_code"`
 	CostStart         float64 `gorm:"column:cost_start"`
+	WholesaleTaxIncl  float64 `gorm:"column:wholesale_tax_incl"`
 	MSRP              float64 `gorm:"column:msrp"`
 	CreatedOn         string  `gorm:"column:created_on"`
 	SizeOptionID      int64   `gorm:"column:size_option_id"`
@@ -57,20 +59,18 @@ func GetInventory(c *gin.Context) {
 	db := models.PostgresNew()
 	defer db.Close()
 
-	// 組建 WHERE 條件
-	where := "WHERE s.deleted_at IS NULL AND p.deleted_at IS NULL"
+	// 組建 WHERE 條件(直接使用 product_size_stocks 別名 pss,進貨加/出貨扣皆已即時更新)
+	// p.is_visible = true 排除被公司決定下架的商品(如 remove.md 列出的清單)
+	where := "WHERE p.deleted_at IS NULL AND p.is_visible = true"
 	args := []interface{}{}
 
 	if v := c.Query("customer_id"); v != "" {
-		where += " AND s.customer_id = ?"
+		where += " AND pss.customer_id = ?"
 		args = append(args, v)
 	}
-	if v := c.Query("model_codes"); v != "" {
-		codes := strings.Split(v, ",")
-		where += " AND p.model_code IN (" + placeholders(len(codes)) + ")"
-		for _, code := range codes {
-			args = append(args, strings.TrimSpace(code))
-		}
+	if frag, fargs := BuildModelCodeRangeWhere("p.model_code", c.Query("model_code_from"), c.Query("model_code_to")); frag != "" {
+		where += " AND " + frag
+		args = append(args, fargs...)
 	}
 	if v := c.Query("brand_ids"); v != "" {
 		ids := strings.Split(v, ",")
@@ -110,19 +110,19 @@ func GetInventory(c *gin.Context) {
 		}
 	}
 
-	// 改用 product_size_stocks 表（進貨加、出貨扣 都已即時更新）
-	where = strings.Replace(where, "s.deleted_at IS NULL AND ", "", 1)
-	where = strings.Replace(where, "s.customer_id", "pss.customer_id", -1)
-
+	// 成本 = 商品主檔「主要供應商」的 最後進價 (product_vendors.cost_last)
+	// 批價 = 商品建檔含稅價 (products.wholesale_tax_incl)
 	sql := fmt.Sprintf(`
 SELECT
   pss.product_id,
   p.model_code,
+  COALESCE(p.name_spec, '') as name_spec,
   pss.customer_id,
   COALESCE(NULLIF(rc.short_name, ''), rc.name, '') as customer_short_name,
   COALESCE(sg.id, 0) as size_group_id,
   COALESCE(sg.code, '') as size_group_code,
-  COALESCE(pv.cost_start, 0) as cost_start,
+  COALESCE(pv.cost_last, 0) as cost_start,
+  COALESCE(p.wholesale_tax_incl, 0) as wholesale_tax_incl,
   COALESCE(p.msrp, 0) as msrp,
   COALESCE(TO_CHAR(p.created_on, 'YYYYMMDD'), '') as created_on,
   pss.size_option_id,
@@ -137,8 +137,8 @@ LEFT JOIN product_vendors pv ON pv.product_id = p.id AND pv.is_primary = true
 LEFT JOIN retail_customers rc ON rc.id = pss.customer_id
 LEFT JOIN product_brands pb ON pb.id = p.product_brand_id
 %s AND pss.qty != 0
-ORDER BY p.model_code, pss.customer_id, so.sort_order
-`, where)
+ORDER BY %s, pss.customer_id, so.sort_order
+`, where, ModelCodeOrderBy("p.model_code"))
 
 	var rawRows []inventoryRawRow
 	if err := db.GetRead().Raw(sql, args...).Scan(&rawRows).Error; err != nil {
@@ -171,11 +171,13 @@ ORDER BY p.model_code, pss.customer_id, so.sort_order
 			row = &inventoryRow{
 				ProductID:         raw.ProductID,
 				ModelCode:         raw.ModelCode,
+				NameSpec:          raw.NameSpec,
 				CustomerID:        raw.CustomerID,
 				CustomerShortName: raw.CustomerShortName,
 				SizeGroupID:       raw.SizeGroupID,
 				SizeGroupCode:     raw.SizeGroupCode,
 				CostStart:         raw.CostStart,
+				WholesaleTaxIncl:  raw.WholesaleTaxIncl,
 				MSRP:              raw.MSRP,
 				CreatedOn:         raw.CreatedOn,
 				Sizes:             map[string]int{},
@@ -217,7 +219,6 @@ ORDER BY p.model_code, pss.customer_id, so.sort_order
 	allRows := make([]inventoryRow, 0, len(aggOrder))
 	for _, key := range aggOrder {
 		row := aggMap[key]
-		row.Amount = math.Round(row.CostStart * float64(row.TotalQty))
 		row.SizeOptions = sizeGroupOptionsMap[row.SizeGroupID]
 		if row.SizeOptions == nil {
 			row.SizeOptions = []inventorySizeCol{}
@@ -226,23 +227,26 @@ ORDER BY p.model_code, pss.customer_id, so.sort_order
 	}
 
 	// 計算全資料合計（分頁前）
+	// summarySizes 以 sort_order 為 key（對齊 Excel 合計位置加總的行為）：
+	// UI 的尺碼欄是 active row 的段碼 options 依 sort_order 排列，合計列對應同 sort_order
+	// 欄位要加總所有段碼在該位置的 qty，不因翻頁 active row 段碼切換而變動。
+	// 批價是 per-product 屬性,不做合計。
 	summaryTotalQty := 0
-	summaryTotalAmount := 0.0
 	summarySizes := map[string]int{}
 	for _, r := range allRows {
 		summaryTotalQty += r.TotalQty
-		summaryTotalAmount += r.Amount
-		for k, v := range r.Sizes {
-			summarySizes[k] += v
+	}
+	for _, raw := range rawRows {
+		if raw.Qty != 0 {
+			summarySizes[strconv.Itoa(raw.SortOrder)] += raw.Qty
 		}
 	}
 
 	resp.Success("成功").SetData(map[string]interface{}{
 		"rows": allRows,
 		"summary": map[string]interface{}{
-			"total_qty":    summaryTotalQty,
-			"total_amount": math.Round(summaryTotalAmount),
-			"sizes":        summarySizes,
+			"total_qty": summaryTotalQty,
+			"sizes":     summarySizes,
 		},
 	}).SetTotal(int64(len(allRows))).Send()
 }

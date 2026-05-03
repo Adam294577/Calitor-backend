@@ -21,8 +21,8 @@ type AdminTokenClaims struct {
 func GenerateAdminToken(claimsData AdminTokenClaims) (string, error) {
 	jwtSecret := viper.GetString("Server.JwtKey")
 
-	// 設定 token 過期時間（2 天）
-	expirationTime := time.Now().Add(2 * 24 * time.Hour)
+	// 設定 token 過期時間（1 天）
+	expirationTime := time.Now().Add(24 * time.Hour)
 
 	// 建立 claims
 	claims := jwt.MapClaims{

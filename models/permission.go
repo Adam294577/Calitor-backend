@@ -6,15 +6,24 @@ import (
 )
 
 // Permission 權限
+//
+// Kind 區分權限項目用途：
+//   - "page": 對應到側邊欄選單／實際頁面（會出現在「選單設定」可被使用者拖曳/改名）
+//   - "func": 純功能權限旗標，不是頁面。包含所有 CRUD 葉子（如 customers.view）
+//     以及跨選單共享的旗標（如 edit-master-code）
+//
+// 由 backfillPermissionKind 依 key 規則自動分類，不開放使用者改。
 type Permission struct {
-	ID        int64        `gorm:"primaryKey" json:"id"`
-	CreatedAt time.Time    `json:"created_at"`
-	UpdatedAt time.Time    `json:"updated_at"`
-	ParentId  *int64       `gorm:"index" json:"parent_id"`
-	Key       string       `gorm:"type:varchar(100);uniqueIndex;not null" json:"key"`
-	Name      string       `gorm:"type:varchar(100);not null" json:"name"`
-	Sort      int          `gorm:"default:0" json:"sort"`
-	Children  []Permission `gorm:"foreignKey:ParentId" json:"children,omitempty"`
+	ID           int64        `gorm:"primaryKey" json:"id"`
+	CreatedAt    time.Time    `json:"created_at"`
+	UpdatedAt    time.Time    `json:"updated_at"`
+	ParentId     *int64       `gorm:"index" json:"parent_id"`
+	Key          string       `gorm:"type:varchar(100);uniqueIndex;not null" json:"key"`
+	Name         string       `gorm:"type:varchar(100);not null" json:"name"`
+	Sort         int          `gorm:"default:0" json:"sort"`
+	Kind         string       `gorm:"type:varchar(10);default:'page';not null;index" json:"kind"`
+	IsCustomized bool         `gorm:"default:false" json:"is_customized"` // 為 true 時，seed 不再覆蓋 name/sort（使用者已透過「選單設定」自訂）
+	Children     []Permission `gorm:"foreignKey:ParentId" json:"children,omitempty"`
 }
 
 // RolePermission 角色權限關聯
@@ -151,7 +160,8 @@ func SeedPermissionsAndRoles(db *DBManager) {
 		{Key: "accounts.view", Name: "檢視帳號", Sort: 1, ParentId: &accountsId},
 		{Key: "accounts.create", Name: "新增帳號", Sort: 2, ParentId: &accountsId},
 		{Key: "accounts.edit", Name: "編輯帳號", Sort: 3, ParentId: &accountsId},
-		{Key: "accounts.disable", Name: "停權帳號", Sort: 4, ParentId: &accountsId},
+		{Key: "accounts.reset_password", Name: "重設他人密碼", Sort: 4, ParentId: &accountsId},
+		{Key: "accounts.disable", Name: "停權帳號", Sort: 5, ParentId: &accountsId},
 		{Key: "roles.view", Name: "檢視角色", Sort: 1, ParentId: &rolesId},
 		{Key: "roles.edit", Name: "編輯角色", Sort: 2, ParentId: &rolesId},
 		{Key: "permissions.view", Name: "檢視權限", Sort: 1, ParentId: &permissionsId},
@@ -163,6 +173,9 @@ func SeedPermissionsAndRoles(db *DBManager) {
 
 	// === 呼叫主檔/輔助資料權限 seed ===
 	SeedMasterDataPermissions(db)
+
+	// === 結構性欄位：依 key 規則回填 kind（page / func）===
+	backfillPermissionKind(db)
 
 	// === 預設角色 admin，綁定所有葉子權限 ===
 	role := Role{Name: "admin"}
@@ -227,9 +240,15 @@ func SeedMasterDataPermissions(db *DBManager) {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&p)
 	}
 
+	// === 頂層：編輯主檔代碼 ===（獨立節點，跨主檔/輔助資料；控制 code 欄位是否可被修改）
+	editMasterCode := Permission{Key: "edit-master-code", Name: "編輯主檔代碼", Sort: 4}
+	db.GetWrite().Where("key = ?", editMasterCode.Key).FirstOrCreate(&editMasterCode)
+	updateSeedIfNotCustomized(db, editMasterCode)
+
 	// === 頂層：輔助資料增修 ===
-	auxiliaryData := Permission{Key: "auxiliary-data", Name: "輔助資料增修", Sort: 4}
+	auxiliaryData := Permission{Key: "auxiliary-data", Name: "輔助資料增修", Sort: 5}
 	db.GetWrite().Where("key = ?", auxiliaryData.Key).FirstOrCreate(&auxiliaryData)
+	updateSeedIfNotCustomized(db, auxiliaryData)
 
 	// 輔助資料 - 第二層
 	auxMid := []Permission{
@@ -246,7 +265,7 @@ func SeedMasterDataPermissions(db *DBManager) {
 	}
 	for i, p := range auxMid {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&auxMid[i])
-		db.GetWrite().Model(&Permission{}).Where("key = ?", p.Key).Updates(map[string]interface{}{"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId})
+		updateSeedIfNotCustomized(db, p)
 	}
 
 	// 輔助資料 - 第三層
@@ -308,8 +327,9 @@ func SeedMasterDataPermissions(db *DBManager) {
 	}
 
 	// === 頂層：日常作業交易 ===
-	dailyOps := Permission{Key: "daily-operations", Name: "日常作業交易", Sort: 5}
+	dailyOps := Permission{Key: "daily-operations", Name: "日常作業交易", Sort: 6}
 	db.GetWrite().Where("key = ?", dailyOps.Key).FirstOrCreate(&dailyOps)
+	updateSeedIfNotCustomized(db, dailyOps)
 
 	dailyMid := []Permission{
 		{Key: "purchases", Name: "廠商採購作業", Sort: 1, ParentId: &dailyOps.ID},
@@ -323,9 +343,7 @@ func SeedMasterDataPermissions(db *DBManager) {
 	}
 	for i, p := range dailyMid {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&dailyMid[i])
-		db.GetWrite().Model(&Permission{}).Where("key = ?", p.Key).Updates(map[string]interface{}{
-			"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId,
-		})
+		updateSeedIfNotCustomized(db, p)
 	}
 
 	dailyLeaf := []Permission{
@@ -366,11 +384,9 @@ func SeedMasterDataPermissions(db *DBManager) {
 	}
 
 	// === 頂層：庫存管理作業 ===
-	inventoryOps := Permission{Key: "inventory-operations", Name: "庫存管理作業", Sort: 6}
+	inventoryOps := Permission{Key: "inventory-operations", Name: "庫存管理作業", Sort: 7}
 	db.GetWrite().Where("key = ?", inventoryOps.Key).FirstOrCreate(&inventoryOps)
-	db.GetWrite().Model(&Permission{}).Where("key = ?", inventoryOps.Key).Updates(map[string]interface{}{
-		"name": inventoryOps.Name, "sort": inventoryOps.Sort,
-	})
+	updateSeedIfNotCustomized(db, inventoryOps)
 
 	inventoryMid := []Permission{
 		{Key: "inventory-query", Name: "庫存查詢", Sort: 1, ParentId: &inventoryOps.ID},
@@ -379,15 +395,15 @@ func SeedMasterDataPermissions(db *DBManager) {
 	}
 	for i, p := range inventoryMid {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&inventoryMid[i])
-		db.GetWrite().Model(&Permission{}).Where("key = ?", p.Key).Updates(map[string]interface{}{
-			"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId,
-		})
+		updateSeedIfNotCustomized(db, p)
 	}
 
 	inventoryLeaf := []Permission{
 		{Key: "inventory-query.view", Name: "檢視庫存", Sort: 1, ParentId: &inventoryMid[0].ID},
 		{Key: "modify.view", Name: "檢視調整單", Sort: 1, ParentId: &inventoryMid[1].ID},
 		{Key: "modify.create", Name: "新增調整單", Sort: 2, ParentId: &inventoryMid[1].ID},
+		{Key: "modify.edit", Name: "編輯調整單", Sort: 3, ParentId: &inventoryMid[1].ID},
+		{Key: "modify.delete", Name: "刪除調整單", Sort: 4, ParentId: &inventoryMid[1].ID},
 		{Key: "transfer.view", Name: "檢視調撥單", Sort: 1, ParentId: &inventoryMid[2].ID},
 		{Key: "transfer.create", Name: "新增調撥單", Sort: 2, ParentId: &inventoryMid[2].ID},
 		{Key: "transfer.edit", Name: "編輯調撥單", Sort: 3, ParentId: &inventoryMid[2].ID},
@@ -401,11 +417,9 @@ func SeedMasterDataPermissions(db *DBManager) {
 	}
 
 	// === 頂層：帳款管理作業 ===
-	accountOps := Permission{Key: "account-operations", Name: "帳款管理作業", Sort: 7}
+	accountOps := Permission{Key: "account-operations", Name: "帳款管理作業", Sort: 8}
 	db.GetWrite().Where("key = ?", accountOps.Key).FirstOrCreate(&accountOps)
-	db.GetWrite().Model(&Permission{}).Where("key = ?", accountOps.Key).Updates(map[string]interface{}{
-		"name": accountOps.Name, "sort": accountOps.Sort,
-	})
+	updateSeedIfNotCustomized(db, accountOps)
 
 	accountMid := []Permission{
 		{Key: "receivable-query", Name: "應收帳款查詢", Sort: 1, ParentId: &accountOps.ID},
@@ -414,9 +428,7 @@ func SeedMasterDataPermissions(db *DBManager) {
 	}
 	for i, p := range accountMid {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&accountMid[i])
-		db.GetWrite().Model(&Permission{}).Where("key = ?", p.Key).Updates(map[string]interface{}{
-			"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId,
-		})
+		updateSeedIfNotCustomized(db, p)
 	}
 
 	accountLeaf := []Permission{
@@ -435,11 +447,9 @@ func SeedMasterDataPermissions(db *DBManager) {
 	}
 
 	// === 頂層：統計報表作業 ===
-	statisticalReports := Permission{Key: "statistical-reports", Name: "統計報表作業", Sort: 8}
+	statisticalReports := Permission{Key: "statistical-reports", Name: "統計報表作業", Sort: 9}
 	db.GetWrite().Where("key = ?", statisticalReports.Key).FirstOrCreate(&statisticalReports)
-	db.GetWrite().Model(&Permission{}).Where("key = ?", statisticalReports.Key).Updates(map[string]interface{}{
-		"name": statisticalReports.Name, "sort": statisticalReports.Sort,
-	})
+	updateSeedIfNotCustomized(db, statisticalReports)
 
 	statisticalMid := []Permission{
 		{Key: "product-in-out-summary", Name: "商品進出簡表", Sort: 1, ParentId: &statisticalReports.ID},
@@ -449,9 +459,7 @@ func SeedMasterDataPermissions(db *DBManager) {
 	}
 	for i, p := range statisticalMid {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&statisticalMid[i])
-		db.GetWrite().Model(&Permission{}).Where("key = ?", p.Key).Updates(map[string]interface{}{
-			"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId,
-		})
+		updateSeedIfNotCustomized(db, p)
 	}
 
 	statisticalLeaf := []Permission{
@@ -466,4 +474,62 @@ func SeedMasterDataPermissions(db *DBManager) {
 			"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId,
 		})
 	}
+
+	// === 頂層：系統設定 ===
+	systemSettings := Permission{Key: "system-settings", Name: "系統設定", Sort: 10}
+	db.GetWrite().Where("key = ?", systemSettings.Key).FirstOrCreate(&systemSettings)
+	updateSeedIfNotCustomized(db, systemSettings)
+
+	// 系統設定 - 第二層
+	systemMid := []Permission{
+		{Key: "menu-settings", Name: "選單設定", Sort: 1, ParentId: &systemSettings.ID},
+		{Key: "firewall-ips", Name: "防火牆IP", Sort: 2, ParentId: &systemSettings.ID},
+	}
+	for i, p := range systemMid {
+		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&systemMid[i])
+		updateSeedIfNotCustomized(db, p)
+	}
+
+	// 系統設定 - 第三層
+	systemLeaf := []Permission{
+		{Key: "menu-settings.view", Name: "檢視選單設定", Sort: 1, ParentId: &systemMid[0].ID},
+		{Key: "menu-settings.edit", Name: "編輯選單設定", Sort: 2, ParentId: &systemMid[0].ID},
+		{Key: "firewall-ips.view", Name: "檢視防火牆IP", Sort: 1, ParentId: &systemMid[1].ID},
+		{Key: "firewall-ips.create", Name: "新增防火牆IP", Sort: 2, ParentId: &systemMid[1].ID},
+		{Key: "firewall-ips.edit", Name: "編輯防火牆IP", Sort: 3, ParentId: &systemMid[1].ID},
+		{Key: "firewall-ips.delete", Name: "刪除防火牆IP", Sort: 4, ParentId: &systemMid[1].ID},
+	}
+	for _, p := range systemLeaf {
+		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&p)
+		db.GetWrite().Model(&Permission{}).Where("key = ?", p.Key).Updates(map[string]interface{}{
+			"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId,
+		})
+	}
+}
+
+// updateSeedIfNotCustomized 僅在 is_customized=false 時更新 name/sort/parent_id。
+// 用於第 1、2 層父層 / 子層（使用者可在「選單設定」頁修改）；第 3 層葉子
+// 仍以原本無條件 Updates 覆蓋，因為使用者本來就不能改 CRUD 權限名稱。
+func updateSeedIfNotCustomized(db *DBManager, p Permission) {
+	db.GetWrite().Model(&Permission{}).
+		Where("key = ? AND is_customized = ?", p.Key, false).
+		Updates(map[string]interface{}{
+			"name": p.Name, "sort": p.Sort, "parent_id": p.ParentId,
+		})
+}
+
+// backfillPermissionKind 根據 key 規則覆寫所有權限的 kind 欄位。
+// 規則：
+//   - func: edit-master-code 與所有 CRUD 葉子（key 含 "."）
+//   - page: 其餘為側邊欄選單分類/頁面
+//
+// kind 為結構性欄位（不開放使用者改），故每次 seed 都無條件覆寫，確保正確。
+func backfillPermissionKind(db *DBManager) {
+	db.GetWrite().Exec(`
+		UPDATE permissions
+		SET kind = CASE
+			WHEN key = 'edit-master-code' OR key LIKE '%.%' THEN 'func'
+			ELSE 'page'
+		END
+	`)
 }

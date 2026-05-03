@@ -23,11 +23,13 @@ type Purchase struct {
 	RecorderID       int64           `gorm:"not null;index" json:"recorder_id"`
 	Recorder         *Admin          `gorm:"foreignKey:RecorderID" json:"recorder,omitempty"`
 	DealMode         int             `gorm:"default:1" json:"deal_mode"`
+	CurrencyCode     string          `gorm:"type:varchar(20)" json:"currency_code"` // 幣別 (RMB/TWD)
 	ConfirmationDate string          `gorm:"type:varchar(20)" json:"confirmation_date"`
 	Remark           string          `gorm:"type:text" json:"remark"`
 	TaxMode          int             `gorm:"default:2" json:"tax_mode"`
 	TaxRate          float64         `gorm:"type:numeric(5,2);default:5" json:"tax_rate"`
 	DeliveryStatus   int             `gorm:"default:0" json:"delivery_status"` // 0=未交 1=部分交貨 2=已交齊
+	IsStopped        bool            `gorm:"default:false" json:"is_stopped"`  // 停交標記
 	Items            []PurchaseItem  `gorm:"foreignKey:PurchaseID" json:"items,omitempty"`
 }
 
@@ -37,6 +39,7 @@ type PurchaseItem struct {
 	CreatedAt     time.Time          `json:"created_at"`
 	UpdatedAt     time.Time          `json:"updated_at"`
 	PurchaseID    int64              `gorm:"not null;index" json:"purchase_id"`
+	Purchase      *Purchase          `gorm:"foreignKey:PurchaseID" json:"purchase,omitempty"`
 	ProductID     int64              `gorm:"not null;index" json:"product_id"`
 	Product       *Product           `gorm:"foreignKey:ProductID" json:"product,omitempty"`
 	SizeGroupID   *int64             `gorm:"index" json:"size_group_id"`
@@ -48,7 +51,8 @@ type PurchaseItem struct {
 	NonTaxPrice   float64            `gorm:"type:numeric(18,2)" json:"non_tax_price"`
 	TotalQty      int                `gorm:"default:0" json:"total_qty"`
 	TotalAmount   float64            `gorm:"type:numeric(18,2);default:0" json:"total_amount"`
-	Supplement    int                `gorm:"type:integer;default:0" json:"supplement"` // 0:空 1:舖 2:補 3:停
+	Supplement    int                `gorm:"type:integer;default:0" json:"supplement"`  // 0:空 1:舖 2:補 3:停
+	CancelFlag    int                `gorm:"type:integer;default:1" json:"cancel_flag"` // 1:正常 2:清除(停交)
 	ExpectedDate  string             `gorm:"type:varchar(20)" json:"expected_date"`
 	Sizes         []PurchaseItemSize `gorm:"foreignKey:PurchaseItemID" json:"sizes,omitempty"`
 }

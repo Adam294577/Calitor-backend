@@ -3,6 +3,7 @@ package controllers
 import (
 	"net/http"
 	"project/models"
+	"project/services/permission"
 	response "project/services/responses"
 	"strconv"
 	"time"
@@ -106,6 +107,9 @@ func UpdateMember(c *gin.Context) {
 		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
 		return
 	}
+
+	// 無「編輯主檔代碼」權限者，忽略 code 欄位變更
+	permission.StripMasterCodeFields(c, rawReq, "code")
 
 	// 檢查 code 唯一性
 	if code, ok := rawReq["code"].(string); ok && code != "" && code != existing.Code {

@@ -72,10 +72,10 @@ type VendorCategory struct {
 
 // Currency 幣別
 type Currency struct {
-	ID        int64          `gorm:"primaryKey" json:"id"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"deleted_at"`
+	ID           int64          `gorm:"primaryKey" json:"id"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+	DeletedAt    gorm.DeletedAt `gorm:"index" json:"deleted_at"`
 	Code         string         `gorm:"type:varchar(10);uniqueIndex;not null" json:"code"`
 	Name         string         `gorm:"type:varchar(50);not null" json:"name"`
 	Symbol       string         `gorm:"type:varchar(10)" json:"symbol"`

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"project/models"
 	"project/services/inventory"
+	modifySvc "project/services/modify"
 	response "project/services/responses"
 	"strconv"
 
@@ -53,6 +54,13 @@ func GetModify(c *gin.Context) {
 	db := models.PostgresNew()
 	defer db.Close()
 
+	// 先取 customer_id 以常數帶入 SizeStocks Preload,避免 Preload 內嵌 subquery
+	var existingCustomerID int64
+	if err := db.GetRead().Model(&models.Modify{}).Where("id = ?", id).Pluck("customer_id", &existingCustomerID).Error; err != nil {
+		resp.Fail(http.StatusNotFound, "調整單不存在").Send()
+		return
+	}
+
 	var item models.Modify
 	err = db.GetRead().
 		Preload("Customer").
@@ -70,6 +78,7 @@ func GetModify(c *gin.Context) {
 		Preload("Items.Product.Size3Group.Options", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order ASC")
 		}).
+		Preload("Items.Product.SizeStocks", "customer_id = ?", existingCustomerID).
 		Preload("Items.SizeGroup.Options", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order ASC")
 		}).
@@ -213,4 +222,62 @@ func CreateModify(c *gin.Context) {
 	}
 
 	resp.Success("新增成功").SetData(modify).Send()
+}
+
+// UpdateModify 更新庫存調整單(委派 services/modify)
+func UpdateModify(c *gin.Context) {
+	resp := response.New(c)
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		resp.Fail(http.StatusBadRequest, "無效的 ID").Send()
+		return
+	}
+
+	var req modifySvc.UpdatePayload
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
+		return
+	}
+
+	db := models.PostgresNew()
+	defer db.Close()
+
+	adminId, _ := c.Get("AdminId")
+	var recorderID int64
+	if aid, ok := adminId.(float64); ok {
+		recorderID = int64(aid)
+	}
+
+	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
+		return modifySvc.Update(tx, id, req, recorderID)
+	})
+	if err != nil {
+		resp.Panic(err).Send()
+		return
+	}
+
+	resp.Success("更新成功").Send()
+}
+
+// DeleteModify 軟刪除庫存調整單(委派 services/modify)
+func DeleteModify(c *gin.Context) {
+	resp := response.New(c)
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		resp.Fail(http.StatusBadRequest, "無效的 ID").Send()
+		return
+	}
+
+	db := models.PostgresNew()
+	defer db.Close()
+
+	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
+		return modifySvc.Delete(tx, id)
+	})
+	if err != nil {
+		resp.Panic(err).Send()
+		return
+	}
+
+	resp.Success("刪除成功").Send()
 }

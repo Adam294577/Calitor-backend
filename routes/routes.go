@@ -53,7 +53,7 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.POST("/accounts", middlewares.RequirePermission("accounts.create"), controllers.CreateAccount)
 		adminAuth.PUT("/accounts/:id", middlewares.RequirePermission("accounts.edit"), controllers.UpdateAccount)
 		adminAuth.PUT("/accounts/:id/disable", middlewares.RequirePermission("accounts.disable"), controllers.DisableAccount)
-		adminAuth.PATCH("/accounts/:id/password", middlewares.RequirePermission("accounts.edit"), controllers.ResetAccountPassword)
+		adminAuth.PATCH("/accounts/:id/password", controllers.ResetAccountPassword)
 
 		// 角色管理
 		adminAuth.GET("/roles", middlewares.RequirePermission("roles.view"), controllers.GetRoles)
@@ -152,6 +152,8 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.POST("/vendors", middlewares.RequirePermission("vendor-mgmt.create"), controllers.CreateVendor)
 		adminAuth.PUT("/vendors/:id", middlewares.RequirePermission("vendor-mgmt.edit"), controllers.UpdateVendor)
 		adminAuth.DELETE("/vendors/:id", middlewares.RequirePermission("vendor-mgmt.delete"), controllers.DeleteVendor)
+		// 廠商對特定商品+尺碼的最近一次採購價(條碼進貨切廠商時帶入預設價)
+		adminAuth.GET("/vendors/:id/recent-purchase-price", middlewares.RequirePermission("stocks.create"), controllers.GetVendorRecentPurchasePrice)
 
 		// 主檔 - 會員
 		adminAuth.GET("/members", middlewares.RequirePermission("member-mgmt.view"), controllers.GetMembers)
@@ -170,6 +172,9 @@ func RouterRegister(route *gin.Engine) {
 		// 商品搜尋（供採購單、訂貨單等作業用）
 		adminAuth.GET("/products/search", controllers.SearchProducts)
 
+		// 批次查詢多商品在指定庫點/客戶的 size_stocks（給 SizeQtyTable 切換 customer/store 時批次刷新）
+		adminAuth.POST("/products/stocks-batch", controllers.GetProductStocksBatch)
+
 		// 日常作業 - 採購未交統計
 		adminAuth.GET("/purchases/outstanding", middlewares.RequirePermission("purchase-outstanding.view"), controllers.GetPurchaseOutstanding)
 
@@ -179,9 +184,12 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.POST("/purchases", middlewares.RequirePermission("purchases.create"), controllers.CreatePurchase)
 		adminAuth.PUT("/purchases/:id", middlewares.RequirePermission("purchases.edit"), controllers.UpdatePurchase)
 		adminAuth.DELETE("/purchases/:id", middlewares.RequirePermission("purchases.delete"), controllers.DeletePurchase)
+		adminAuth.PUT("/purchases/:id/stop", middlewares.RequirePermission("purchases.edit"), controllers.StopPurchase)
 
 		// 採購單搜尋（供進貨單選擇關聯採購）
 		adminAuth.GET("/purchases/search", middlewares.RequirePermission("stocks.view"), controllers.SearchPurchases)
+		// 採購明細搜尋（供進貨單逐筆選擇商品用，對應出貨端 orders/search-items）
+		adminAuth.GET("/purchases/search-items", middlewares.RequirePermission("stocks.view"), controllers.SearchPurchaseItems)
 
 		// 日常作業 - 廠商進貨
 		adminAuth.GET("/stocks", middlewares.RequirePermission("stocks.view"), controllers.GetStocks)
@@ -191,6 +199,9 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.POST("/stocks", middlewares.RequirePermission("stocks.create"), controllers.CreateStock)
 		adminAuth.PUT("/stocks/:id", middlewares.RequirePermission("stocks.edit"), controllers.UpdateStock)
 		adminAuth.DELETE("/stocks/:id", middlewares.RequirePermission("stocks.delete"), controllers.DeleteStock)
+		// 條碼輸入進貨
+		adminAuth.POST("/stocks/barcode-parse", middlewares.RequirePermission("stocks.create"), controllers.StockBarcodeParse)
+		adminAuth.POST("/stocks/batch", middlewares.RequirePermission("stocks.create"), controllers.CreateStockBatch)
 
 		// 日常作業 - 客戶訂貨
 		adminAuth.GET("/orders", middlewares.RequirePermission("orders.view"), controllers.GetOrders)
@@ -216,6 +227,7 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.DELETE("/shipments/:id", middlewares.RequirePermission("shipments.delete"), controllers.DeleteShipment)
 		adminAuth.GET("/shipments/credit/:customer_id", middlewares.RequirePermission("shipments.view"), controllers.GetCustomerCredit)
 		adminAuth.POST("/shipments/barcode-parse", middlewares.RequirePermission("shipments.create"), controllers.BarcodeParse)
+		adminAuth.POST("/shipments/batch", middlewares.RequirePermission("shipments.create"), controllers.CreateShipmentBatch)
 
 		// 庫存管理 - 庫存查詢
 		adminAuth.GET("/inventory", middlewares.RequirePermission("inventory-query.view"), controllers.GetInventory)
@@ -237,6 +249,8 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.GET("/modifies", middlewares.RequirePermission("modify.view"), controllers.GetModifies)
 		adminAuth.GET("/modifies/:id", middlewares.RequirePermission("modify.view"), controllers.GetModify)
 		adminAuth.POST("/modifies", middlewares.RequirePermission("modify.create"), controllers.CreateModify)
+		adminAuth.PUT("/modifies/:id", middlewares.RequirePermission("modify.edit"), controllers.UpdateModify)
+		adminAuth.DELETE("/modifies/:id", middlewares.RequirePermission("modify.delete"), controllers.DeleteModify)
 
 		// 庫存管理 - 店櫃調撥
 		adminAuth.GET("/transfers", middlewares.RequirePermission("transfer.view"), controllers.GetTransfers)
@@ -259,6 +273,7 @@ func RouterRegister(route *gin.Engine) {
 
 		// 帳款管理 - 應收帳款查詢
 		adminAuth.GET("/receivables", middlewares.RequirePermission("receivable-query.view"), controllers.GetReceivables)
+		adminAuth.GET("/receivables/customers", middlewares.RequirePermission("receivable-query.view"), controllers.GetReceivableCustomers)
 
 		// 帳款管理 - 應收帳齡分析表
 		adminAuth.GET("/receivables/aging", middlewares.RequirePermission("receivable-aging.view"), controllers.GetReceivableAging)
@@ -275,6 +290,16 @@ func RouterRegister(route *gin.Engine) {
 		// 圖片上傳
 		adminAuth.POST("/upload/product-image", middlewares.RequirePermission("product-mgmt.create"), controllers.UploadProductImage)
 		adminAuth.DELETE("/upload/product-image", middlewares.RequirePermission("product-mgmt.delete"), controllers.DeleteProductImage)
+
+		// 系統設定 - 選單設定
+		adminAuth.GET("/menu-settings", middlewares.RequirePermission("menu-settings.view"), controllers.GetMenuSettingsTree)
+		adminAuth.PUT("/menu-settings", middlewares.RequirePermission("menu-settings.edit"), controllers.UpdateMenuSettings)
+
+		// 系統設定 - 防火牆 IP
+		adminAuth.GET("/firewall-ips", middlewares.RequirePermission("firewall-ips.view"), controllers.GetFirewallIPs)
+		adminAuth.POST("/firewall-ips", middlewares.RequirePermission("firewall-ips.create"), controllers.CreateFirewallIP)
+		adminAuth.PUT("/firewall-ips/:id", middlewares.RequirePermission("firewall-ips.edit"), controllers.UpdateFirewallIP)
+		adminAuth.DELETE("/firewall-ips/:id", middlewares.RequirePermission("firewall-ips.delete"), controllers.DeleteFirewallIP)
 
 	}
 }

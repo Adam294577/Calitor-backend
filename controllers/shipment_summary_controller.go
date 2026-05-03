@@ -14,10 +14,10 @@ import (
 
 // shipmentSummaryRow 客戶出貨統計列
 type shipmentSummaryRow struct {
-	GroupLabel   string  `json:"group_label"`
-	CustomerCode string  `json:"customer_code,omitempty"`
-	CustomerName string  `json:"customer_name,omitempty"`
-	ModelCode    string  `json:"model_code,omitempty"`
+	GroupLabel   string `json:"group_label"`
+	CustomerCode string `json:"customer_code,omitempty"`
+	CustomerName string `json:"customer_name,omitempty"`
+	ModelCode    string `json:"model_code,omitempty"`
 
 	ShipQty      int     `json:"ship_qty"`
 	ShipAmount   float64 `json:"ship_amount"`
@@ -53,9 +53,10 @@ func GetShipmentSummary(c *gin.Context) {
 	dateTo := c.Query("date_to")
 	customerIDs := c.QueryArray("customer_id")
 	salesmanIDs := c.QueryArray("salesman_id")
-	modelCodes := c.QueryArray("model_code")
+	modelCodeFrom := c.Query("model_code_from")
+	modelCodeTo := c.Query("model_code_to")
 	brandIDStrs := c.QueryArray("brand_id")
-	shipModeStr := c.Query("ship_mode")   // "" | "3" | "4"
+	shipModeStr := c.Query("ship_mode")    // "" | "3" | "4"
 	supplementStr := c.Query("supplement") // "" | "1" | "2"
 	dealModeStr := c.Query("deal_mode")    // "" | "1" | "2"
 	remark := strings.TrimSpace(c.Query("remark"))
@@ -112,14 +113,15 @@ func GetShipmentSummary(c *gin.Context) {
 	}
 
 	// 明細層過濾：舖補 / 型號 / 品牌 —— 改從 SQL WHERE 過濾，避免先 Preload 全部再於應用層 filter 造成 N+1
+	modelFrag, modelArgs := BuildModelCodeRangeWhere("products.model_code", modelCodeFrom, modelCodeTo)
 	applyItemFilter := func(q *gorm.DB) *gorm.DB {
 		if supplementStr == "1" || supplementStr == "2" {
 			q = q.Where("shipment_items.supplement = ?", supplementStr)
 		}
-		if len(modelCodes) > 0 || len(brandIDs) > 0 {
+		if modelFrag != "" || len(brandIDs) > 0 {
 			q = q.Joins("JOIN products ON products.id = shipment_items.product_id")
-			if len(modelCodes) > 0 {
-				q = q.Where("products.model_code IN ?", modelCodes)
+			if modelFrag != "" {
+				q = q.Where(modelFrag, modelArgs...)
 			}
 			if len(brandIDs) > 0 {
 				q = q.Where("products.brand_id IN ?", brandIDs)
@@ -127,7 +129,7 @@ func GetShipmentSummary(c *gin.Context) {
 		}
 		return q
 	}
-	hasItemFilter := (supplementStr == "1" || supplementStr == "2") || len(modelCodes) > 0 || len(brandIDs) > 0
+	hasItemFilter := (supplementStr == "1" || supplementStr == "2") || modelFrag != "" || len(brandIDs) > 0
 	if hasItemFilter {
 		sub := applyItemFilter(db.GetRead().Model(&models.ShipmentItem{}).Select("shipment_items.shipment_id"))
 		query = query.Where("shipments.id IN (?)", sub)
@@ -307,7 +309,13 @@ func GetShipmentSummary(c *gin.Context) {
 			per.TotalAmount = per.NetAmount + per.TaxAmount
 			accumulateRow(&entry.row, &per)
 		}
-		sort.Strings(order)
+		if groupBy == "customer" {
+			sort.Strings(order)
+		} else {
+			sort.Slice(order, func(i, j int) bool {
+				return ModelCodeNaturalLess(order[i], order[j])
+			})
+		}
 		for _, k := range order {
 			e := aggMap[k]
 			e.row.Gross = e.row.NetAmount - e.row.Cost
@@ -336,7 +344,7 @@ func grossRate(gross, base float64) float64 {
 	if base == 0 {
 		return 0
 	}
-	return math.Round(gross/base*10000) / 100
+	return math.Round(gross / base * 100)
 }
 
 func accumulateRow(dst, src *shipmentSummaryRow) {

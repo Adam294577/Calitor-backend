@@ -5,10 +5,10 @@ import (
 	"math"
 	"net/http"
 	"project/models"
+	"project/services/barcode"
 	"project/services/inventory"
 	"project/services/receivable"
 	response "project/services/responses"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -29,7 +29,7 @@ func GetShipments(c *gin.Context) {
 		Preload("Customer").
 		Preload("FillPerson").
 		Preload("Recorder").
-		Order("shipments.shipment_date DESC, shipments.id DESC")
+		Order("shipments.shipment_date DESC, shipments.shipment_no DESC")
 
 	if v := c.Query("search"); v != "" {
 		query = ApplySearch(query, v, "shipment_no")
@@ -72,6 +72,10 @@ func GetShipment(c *gin.Context) {
 		Preload("Items", func(db *gorm.DB) *gorm.DB {
 			return db.Order("item_order ASC")
 		}).
+		// 先載 OrderItem，避免最後再 Preload 時重查 shipment_items 覆寫掉已掛好的 Product 關聯
+		Preload("Items.OrderItem").
+		// 與 GetOrder 相同：先明確載入 Product，再掛尺碼組與 category_maps
+		Preload("Items.Product").
 		Preload("Items.Product.Size1Group.Options", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order ASC")
 		}).
@@ -89,7 +93,6 @@ func GetShipment(c *gin.Context) {
 			return db.Order("sort_order ASC")
 		}).
 		Preload("Items.Sizes.SizeOption").
-		Preload("Items.OrderItem").
 		Where("id = ?", id).
 		First(&item).Error
 	if err != nil {
@@ -136,7 +139,7 @@ func GetShipment(c *gin.Context) {
 	outstanding := bal.TotalDeal - bal.TotalCharge
 
 	resp.Success("成功").SetData(map[string]interface{}{
-		"shipment":    item,
+		"shipment":     item,
 		"order_no_map": orderNoMap,
 		"outstanding":  outstanding,
 		"credit_limit": customer.CreditLimit,
@@ -362,7 +365,7 @@ func CreateShipment(c *gin.Context) {
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
 			}
-			totalAmount := float64(totalQty) * reqItem.ShipPrice
+			totalAmount := math.Round(float64(totalQty) * reqItem.ShipPrice)
 
 			item := models.ShipmentItem{
 				ShipmentID:  shipment.ID,
@@ -441,7 +444,7 @@ func CreateShipment(c *gin.Context) {
 			}
 		}
 
-		// 計算應收金額（含稅合計），退貨為負數
+		// 計算應收金額（含稅合計 - 折扣），退貨為負數
 		var totalShipAmount float64
 		for _, reqItem := range req.Items {
 			qty := 0
@@ -454,7 +457,7 @@ func CreateShipment(c *gin.Context) {
 		if req.TaxMode == 2 {
 			taxAmt = math.Round(totalShipAmount * req.TaxRate / 100)
 		}
-		dealAmount := totalShipAmount + taxAmt
+		dealAmount := totalShipAmount + taxAmt - req.DiscountAmount
 		if req.ShipmentMode == 4 {
 			dealAmount = -dealAmount // 退貨為負數
 		}
@@ -631,7 +634,7 @@ func UpdateShipment(c *gin.Context) {
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
 			}
-			totalAmount := float64(totalQty) * reqItem.ShipPrice
+			totalAmount := math.Round(float64(totalQty) * reqItem.ShipPrice)
 
 			item := models.ShipmentItem{
 				ShipmentID:  id,
@@ -713,7 +716,7 @@ func UpdateShipment(c *gin.Context) {
 			}
 		}
 
-		// 重算應收金額，退貨為負數
+		// 重算應收金額（含稅合計 - 折扣），退貨為負數
 		var totalShipAmount float64
 		for _, reqItem := range req.Items {
 			qty := 0
@@ -726,7 +729,7 @@ func UpdateShipment(c *gin.Context) {
 		if req.TaxMode == 2 {
 			taxAmt = math.Round(totalShipAmount * req.TaxRate / 100)
 		}
-		dealAmount := totalShipAmount + taxAmt
+		dealAmount := totalShipAmount + taxAmt - req.DiscountAmount
 		if req.ShipmentMode == 4 {
 			dealAmount = -dealAmount
 		}
@@ -849,7 +852,7 @@ func GetCustomerCredit(c *gin.Context) {
 	var bal balRow
 	db.GetRead().Model(&models.Shipment{}).
 		Select("COALESCE(SUM(deal_amount), 0) as total_deal, COALESCE(SUM(charge_amount), 0) as total_charge").
-		Where("customer_id = ? AND deleted_at IS NULL",customerID).
+		Where("customer_id = ? AND deleted_at IS NULL", customerID).
 		Scan(&bal)
 
 	outstanding := bal.TotalDeal - bal.TotalCharge
@@ -879,27 +882,9 @@ func BarcodeParse(c *gin.Context) {
 		return
 	}
 
-	// 1. 查所有 SizeGroup + Options（依 sort_order 排序）
-	var sizeGroups []models.SizeGroup
-	db.GetRead().Preload("Options", func(d *gorm.DB) *gorm.DB {
-		return d.Order("sort_order ASC")
-	}).Find(&sizeGroups)
+	// 1. 載入 SizeGroups(排序好的) + 逐筆解析條碼
+	sgList := barcode.LoadSizeGroups(db.GetRead())
 
-	// 建立 SizeGroup.Code → SizeGroup 對照（code 從長到短排序，方便匹配）
-	type sgInfo struct {
-		ID      int64
-		Code    string
-		Options []models.SizeOption
-	}
-	var sgList []sgInfo
-	for _, sg := range sizeGroups {
-		sgList = append(sgList, sgInfo{ID: sg.ID, Code: sg.Code, Options: sg.Options})
-	}
-	sort.Slice(sgList, func(i, j int) bool {
-		return len(sgList[i].Code) > len(sgList[j].Code)
-	})
-
-	// 2. 解析每筆條碼 → model_code + sizeGroupCode + position
 	type parsedEntry struct {
 		Barcode       string
 		Qty           int
@@ -929,55 +914,21 @@ func BarcodeParse(c *gin.Context) {
 			qty = 1
 		}
 
-		// 嘗試從尾部匹配: {SizeGroupCode}{Position:02d}
-		matched := false
-		for _, sg := range sgList {
-			code := sg.Code
-			// 條碼尾部至少要有 code + 2 位數字，且前面還有 model_code
-			suffixLen := len(code) + 2
-			if len(bc) <= suffixLen {
-				continue
-			}
-			tail := bc[len(bc)-suffixLen:]
-			if !strings.HasPrefix(tail, code) {
-				continue
-			}
-			posStr := tail[len(code):]
-			pos, err := strconv.Atoi(posStr)
-			if err != nil || pos < 1 {
-				continue
-			}
-			// 確認 position 在範圍內
-			if pos > len(sg.Options) {
-				errors = append(errors, errorEntry{
-					Barcode: bc,
-					Reason:  fmt.Sprintf("尺碼位置超出範圍: 第%d格（共%d格）", pos, len(sg.Options)),
-				})
-				matched = true
-				break
-			}
-			opt := sg.Options[pos-1] // 0-based index
-			modelCode := bc[:len(bc)-suffixLen]
-
-			parsed = append(parsed, parsedEntry{
-				Barcode:       bc,
-				Qty:           qty,
-				ModelCode:     modelCode,
-				SizeGroupCode: code,
-				Position:      pos,
-				SizeGroupID:   sg.ID,
-				SizeOptionID:  opt.ID,
-				SizeLabel:     opt.Label,
-			})
-			matched = true
-			break
+		p, perr := barcode.Parse(bc, sgList)
+		if perr != nil {
+			errors = append(errors, errorEntry{Barcode: perr.Barcode, Reason: perr.Reason})
+			continue
 		}
-		if !matched {
-			errors = append(errors, errorEntry{
-				Barcode: bc,
-				Reason:  "無法解析條碼格式",
-			})
-		}
+		parsed = append(parsed, parsedEntry{
+			Barcode:       p.Barcode,
+			Qty:           qty,
+			ModelCode:     p.ModelCode,
+			SizeGroupCode: p.SizeGroupCode,
+			Position:      p.Position,
+			SizeGroupID:   p.SizeGroupID,
+			SizeOptionID:  p.SizeOptionID,
+			SizeLabel:     p.SizeLabel,
+		})
 	}
 
 	// 3. 收集所有 model_code，批次查 Product
@@ -991,12 +942,70 @@ func BarcodeParse(c *gin.Context) {
 	}
 
 	productMap := map[string]*models.Product{} // model_code → Product
+	productIDs := make([]int64, 0, len(mcList))
 	if len(mcList) > 0 {
 		var products []models.Product
 		db.GetRead().Where("model_code IN ?", mcList).Find(&products)
 		for i := range products {
 			productMap[products[i].ModelCode] = &products[i]
+			productIDs = append(productIDs, products[i].ID)
 		}
+	}
+
+	// 該客戶 × 各型號最早一次「舖」的 order_price (與鍵盤輸入 supplement_info.first_pu_price 邏輯一致)
+	firstPuPriceMap := map[int64]float64{}
+	// 該客戶 × 各型號是否有出貨歷史(對齊 purchase_controller supplement_info.has_shipment_history)
+	// 用於決定無未交單時 supplement 該設 1(舖) 還是 2(補)
+	hasShipmentSet := map[int64]bool{}
+	if len(productIDs) > 0 {
+		type priceRow struct {
+			ProductID  int64
+			OrderPrice float64
+		}
+		var priceRows []priceRow
+		db.GetRead().Raw(`
+			SELECT DISTINCT ON (oi.product_id) oi.product_id, oi.order_price
+			FROM order_items oi
+			JOIN orders o ON o.id = oi.order_id AND o.deleted_at IS NULL
+			WHERE o.customer_id = ? AND oi.product_id IN (?) AND oi.supplement = 1
+			ORDER BY oi.product_id, o.order_date ASC, oi.id ASC
+		`, req.CustomerID, productIDs).Scan(&priceRows)
+		for _, r := range priceRows {
+			firstPuPriceMap[r.ProductID] = r.OrderPrice
+		}
+
+		type shipRow struct {
+			ProductID int64
+		}
+		var shipRows []shipRow
+		db.GetRead().Table("shipment_items AS si").
+			Select("DISTINCT si.product_id").
+			Joins("JOIN shipments s ON s.id = si.shipment_id AND s.deleted_at IS NULL").
+			Where("s.customer_id = ? AND si.product_id IN ?", req.CustomerID, productIDs).
+			Scan(&shipRows)
+		for _, r := range shipRows {
+			hasShipmentSet[r.ProductID] = true
+		}
+	}
+
+	// 無未交單時的 supplement 判定:該客戶該型號出貨過 → 2(補),否則 1(舖)
+	supplementForFree := func(productID int64) int {
+		if hasShipmentSet[productID] {
+			return 2
+		}
+		return 1
+	}
+
+	// 沒命中未交單時的 fallback 批價：first_pu_price > wholesale_tax_incl > wholesale
+	// (對齊 SizeQtyTable.vue type='shipment' 的邏輯)
+	fallbackShipPrice := func(prod *models.Product) float64 {
+		if pu := firstPuPriceMap[prod.ID]; pu > 0 {
+			return pu
+		}
+		if prod.WholesaleTaxIncl > 0 {
+			return prod.WholesaleTaxIncl
+		}
+		return prod.Wholesale
 	}
 
 	// 4. 篩掉查無商品的，收集有效的 product_id
@@ -1062,7 +1071,7 @@ func BarcodeParse(c *gin.Context) {
 				SizeLabel:     p.SizeLabel,
 				Qty:           p.Qty,
 				SellPrice:     prod.MSRP,
-				ShipPrice:     prod.Wholesale,
+				ShipPrice:     fallbackShipPrice(prod),
 				NonTaxPrice:   prod.Wholesale,
 				Status:        "ok",
 			}
@@ -1080,12 +1089,7 @@ func BarcodeParse(c *gin.Context) {
 	}
 
 	// 5. 查該客戶未交訂單的 OrderItem（含 Sizes）
-	var productIDs []int64
-	for _, mc := range mcList {
-		if prod, ok := productMap[mc]; ok {
-			productIDs = append(productIDs, prod.ID)
-		}
-	}
+	// productIDs 已在前面填好(從 productMap 同一批 products),這裡直接重用
 
 	var orderItems []models.OrderItem
 	if len(productIDs) > 0 {
@@ -1182,9 +1186,27 @@ func BarcodeParse(c *gin.Context) {
 		candidates, hasCand := candidateMap[candKey]
 
 		if !hasCand || len(candidates) == 0 {
-			errors = append(errors, errorEntry{
-				Barcode: p.Barcode,
-				Reason:  fmt.Sprintf("此客戶無此商品+尺碼的未交訂單 (%s 尺碼%s)", p.ModelCode, p.SizeLabel),
+			// 無對應未交訂單 → 仍輸出為自由出貨列(order_item_id=0,批價取建檔批價)
+			// 與鍵盤輸入一致:沒有訂貨單也能照常出貨;Supplement 依該客戶該型號出貨歷史判定
+			resultItems = append(resultItems, resultItem{
+				Barcode:        p.Barcode,
+				ModelCode:      p.ModelCode,
+				ProductID:      prod.ID,
+				ProductName:    prod.NameSpec,
+				SizeGroupID:    p.SizeGroupID,
+				SizeGroupCode:  p.SizeGroupCode,
+				SizeOptionID:   p.SizeOptionID,
+				SizeLabel:      p.SizeLabel,
+				Qty:            p.Qty,
+				OrderItemID:    0,
+				OrderNo:        "",
+				OutstandingQty: 0,
+				SellPrice:      prod.MSRP,
+				Discount:       0,
+				ShipPrice:      fallbackShipPrice(prod),
+				NonTaxPrice:    prod.Wholesale,
+				Supplement:     supplementForFree(prod.ID),
+				Status:         "ok",
 			})
 			continue
 		}

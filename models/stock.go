@@ -6,6 +6,12 @@ import (
 	"gorm.io/gorm"
 )
 
+// Stock InputMode 來源
+const (
+	StockInputModeKeyboard = 1 // 鍵盤輸入(controllers.CreateStock 單筆 endpoint 預設)
+	StockInputModeBarcode  = 2 // 條碼掃描(services/stock.CreateBatch 批次建單預設)
+)
+
 // Stock 進貨主表
 type Stock struct {
 	ID              int64           `gorm:"primaryKey" json:"id"`
@@ -20,9 +26,9 @@ type Stock struct {
 	Vendor          *Vendor         `gorm:"foreignKey:VendorID" json:"vendor,omitempty"`
 	PurchaseID      *int64          `gorm:"index" json:"purchase_id"`
 	Purchase        *Purchase       `gorm:"foreignKey:PurchaseID" json:"purchase,omitempty"`
-	StockMode       int             `gorm:"default:1" json:"stock_mode"`           // 1=進貨 2=退貨
-	DealMode        int             `gorm:"default:1" json:"deal_mode"`            // 1=買斷 2=寄賣
-	CurrencyCode    string          `gorm:"type:varchar(20)" json:"currency_code"` // 幣別
+	VendorStockNo   string          `gorm:"type:varchar(50)" json:"vendor_stock_no"` // 廠商單號（備註用，非綁定）
+	StockMode       int             `gorm:"default:1" json:"stock_mode"`             // 1=進貨 2=退貨
+	DealMode        int             `gorm:"default:1" json:"deal_mode"`              // 1=買斷 2=寄賣
 	FillPersonID    *int64          `gorm:"index" json:"fill_person_id"`
 	FillPerson      *Admin          `gorm:"foreignKey:FillPersonID" json:"fill_person,omitempty"`
 	RecorderID      int64           `gorm:"not null;index" json:"recorder_id"`
@@ -38,6 +44,7 @@ type Stock struct {
 	InvoiceNo       string          `gorm:"type:varchar(50)" json:"invoice_no"`
 	InvoiceAmount   float64         `gorm:"type:numeric(18,2);default:0" json:"invoice_amount"`
 	ChargeAmount    float64         `gorm:"type:numeric(18,2);default:0" json:"charge_amount"`
+	InputMode       int             `gorm:"type:integer;default:1" json:"input_mode"` // 1=鍵盤 2=掃描器
 	Items           []StockItem     `gorm:"foreignKey:StockID" json:"items,omitempty"`
 }
 

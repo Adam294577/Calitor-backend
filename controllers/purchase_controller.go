@@ -2,8 +2,11 @@ package controllers
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"project/models"
+	"project/services/delivery"
+	"project/services/purchase"
 	response "project/services/responses"
 	"strconv"
 
@@ -83,7 +86,37 @@ func GetPurchase(c *gin.Context) {
 		resp.Fail(http.StatusNotFound, "採購單不存在").Send()
 		return
 	}
-	resp.Success("成功").SetData(item).Send()
+
+	// 查已進貨數量（供前端顯示採購未交量）
+	var allItemIDs []int64
+	for _, it := range item.Items {
+		allItemIDs = append(allItemIDs, it.ID)
+	}
+	delivered := delivery.DeliveredQtyMap(db.GetRead(), allItemIDs)
+
+	// 查關聯進貨單號（每個 purchase_item 對應的 stock_no 列表）
+	type stockInfo struct {
+		PurchaseItemID int64
+		StockNo        string
+	}
+	var stockInfos []stockInfo
+	if len(allItemIDs) > 0 {
+		db.GetRead().Model(&models.StockItem{}).
+			Select("stock_items.purchase_item_id, stocks.stock_no").
+			Joins("JOIN stocks ON stocks.id = stock_items.stock_id AND stocks.deleted_at IS NULL").
+			Where("stock_items.purchase_item_id IN ?", allItemIDs).
+			Scan(&stockInfos)
+	}
+	stockNos := map[int64][]string{}
+	for _, si := range stockInfos {
+		stockNos[si.PurchaseItemID] = append(stockNos[si.PurchaseItemID], si.StockNo)
+	}
+
+	resp.Success("成功").SetData(map[string]interface{}{
+		"purchase":  item,
+		"delivered": delivered,
+		"stock_nos": stockNos,
+	}).Send()
 }
 
 // CreatePurchase 新增採購單
@@ -98,6 +131,7 @@ func CreatePurchase(c *gin.Context) {
 		VendorID         int64   `json:"vendor_id" binding:"required"`
 		FillPersonID     *int64  `json:"fill_person_id"`
 		DealMode         int     `json:"deal_mode"`
+		CurrencyCode     string  `json:"currency_code"`
 		ConfirmationDate string  `json:"confirmation_date"`
 		Remark           string  `json:"remark"`
 		TaxMode          int     `json:"tax_mode"`
@@ -111,6 +145,7 @@ func CreatePurchase(c *gin.Context) {
 			PurchasePrice float64 `json:"purchase_price"`
 			NonTaxPrice   float64 `json:"non_tax_price"`
 			Supplement    int     `json:"supplement"`
+			CancelFlag    int     `json:"cancel_flag"`
 			ExpectedDate  string  `json:"expected_date"`
 			Sizes         []struct {
 				SizeOptionID int64 `json:"size_option_id"`
@@ -181,6 +216,7 @@ func CreatePurchase(c *gin.Context) {
 		FillPersonID:     req.FillPersonID,
 		RecorderID:       recorderID,
 		DealMode:         req.DealMode,
+		CurrencyCode:     req.CurrencyCode,
 		ConfirmationDate: req.ConfirmationDate,
 		Remark:           req.Remark,
 		TaxMode:          req.TaxMode,
@@ -196,7 +232,12 @@ func CreatePurchase(c *gin.Context) {
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
 			}
-			totalAmount := float64(totalQty) * reqItem.PurchasePrice
+			totalAmount := math.Round(float64(totalQty) * reqItem.PurchasePrice)
+
+			cancelFlag := reqItem.CancelFlag
+			if cancelFlag == 0 {
+				cancelFlag = 1
+			}
 
 			item := models.PurchaseItem{
 				PurchaseID:    purchase.ID,
@@ -210,6 +251,7 @@ func CreatePurchase(c *gin.Context) {
 				TotalQty:      totalQty,
 				TotalAmount:   totalAmount,
 				Supplement:    reqItem.Supplement,
+				CancelFlag:    cancelFlag,
 				ExpectedDate:  reqItem.ExpectedDate,
 			}
 			if err := tx.Create(&item).Error; err != nil {
@@ -260,6 +302,7 @@ func UpdatePurchase(c *gin.Context) {
 		VendorID         int64   `json:"vendor_id"`
 		FillPersonID     *int64  `json:"fill_person_id"`
 		DealMode         int     `json:"deal_mode"`
+		CurrencyCode     string  `json:"currency_code"`
 		ConfirmationDate string  `json:"confirmation_date"`
 		Remark           string  `json:"remark"`
 		TaxMode          int     `json:"tax_mode"`
@@ -273,6 +316,7 @@ func UpdatePurchase(c *gin.Context) {
 			PurchasePrice float64 `json:"purchase_price"`
 			NonTaxPrice   float64 `json:"non_tax_price"`
 			Supplement    int     `json:"supplement"`
+			CancelFlag    int     `json:"cancel_flag"`
 			ExpectedDate  string  `json:"expected_date"`
 			Sizes         []struct {
 				SizeOptionID int64 `json:"size_option_id"`
@@ -309,6 +353,7 @@ func UpdatePurchase(c *gin.Context) {
 			"fill_person_id":    req.FillPersonID,
 			"recorder_id":       recorderID,
 			"deal_mode":         req.DealMode,
+			"currency_code":     req.CurrencyCode,
 			"confirmation_date": req.ConfirmationDate,
 			"remark":            req.Remark,
 			"tax_mode":          req.TaxMode,
@@ -324,7 +369,12 @@ func UpdatePurchase(c *gin.Context) {
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
 			}
-			totalAmount := float64(totalQty) * reqItem.PurchasePrice
+			totalAmount := math.Round(float64(totalQty) * reqItem.PurchasePrice)
+
+			cancelFlag := reqItem.CancelFlag
+			if cancelFlag <= 0 {
+				cancelFlag = 1
+			}
 
 			item := models.PurchaseItem{
 				PurchaseID:    id,
@@ -338,6 +388,7 @@ func UpdatePurchase(c *gin.Context) {
 				TotalQty:      totalQty,
 				TotalAmount:   totalAmount,
 				Supplement:    reqItem.Supplement,
+				CancelFlag:    cancelFlag,
 				ExpectedDate:  reqItem.ExpectedDate,
 			}
 			if err := tx.Create(&item).Error; err != nil {
@@ -362,6 +413,56 @@ func UpdatePurchase(c *gin.Context) {
 	}
 
 	resp.Success("更新成功").Send()
+}
+
+// StopPurchase 停交：將所有明細 cancel_flag 設為 2(停交)，並更新交貨狀態
+func StopPurchase(c *gin.Context) {
+	resp := response.New(c)
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		resp.Fail(http.StatusBadRequest, "無效的 ID").Send()
+		return
+	}
+
+	db := models.PostgresNew()
+	defer db.Close()
+
+	var existing models.Purchase
+	if err := db.GetRead().Where("id = ?", id).First(&existing).Error; err != nil {
+		resp.Fail(http.StatusNotFound, "採購單不存在").Send()
+		return
+	}
+
+	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
+		return purchase.Stop(tx, id)
+	})
+	if err != nil {
+		resp.Panic(err).Send()
+		return
+	}
+
+	resp.Success("停交成功").Send()
+}
+
+// SearchPurchaseItems 搜尋廠商未交齊的採購明細（供進貨單逐筆選擇商品用）
+// 同一型號可能來自多張採購單，每筆都獨立列出
+func SearchPurchaseItems(c *gin.Context) {
+	resp := response.New(c)
+	vendorID := c.Query("vendor_id")
+	if vendorID == "" {
+		resp.Fail(400, "請提供 vendor_id").Send()
+		return
+	}
+
+	db := models.PostgresNew()
+	defer db.Close()
+
+	result, err := purchase.SearchItems(db.GetRead(), vendorID, c.Query("customer_id"), c.Query("search"))
+	if err != nil {
+		resp.Panic(err).Send()
+		return
+	}
+	resp.Success("成功").SetData(result).Send()
 }
 
 // DeletePurchase 軟刪除採購單
@@ -395,24 +496,21 @@ func SearchProducts(c *gin.Context) {
 	brandID := c.Query("brand_id")
 	customerID := c.Query("customer_id")
 	storeCode := c.Query("store_code")
+	orderContext := c.Query("order_context") // "1" = 訂貨情境：回傳 supplement_info 供舖/補 與批價預設判定
 
 	// --- 商品主檔：先查 Redis，miss 再打 DB ---
 	var items []models.Product
 	if !getListCache(c, &items) {
-		query := db.GetRead().Order("id ASC")
+		query := db.GetRead().Order(ModelCodeOrderBy("model_code"))
 		if vendorID != "" {
 			query = query.Where("id IN (SELECT product_id FROM product_vendors WHERE vendor_id = ?)", vendorID)
 		}
 		if brandID != "" {
 			query = query.Where("brand_id = ?", brandID)
 		}
-		if customerID != "" && vendorID == "" && brandID == "" {
-			// 出貨用：依客戶的訂貨明細找商品
-			query = query.Where("id IN (SELECT DISTINCT oi.product_id FROM order_items oi JOIN orders o ON o.id = oi.order_id AND o.deleted_at IS NULL WHERE o.customer_id = ?)", customerID)
-		}
 		if search != "" {
-			like := "%" + search + "%"
-			query = query.Where("model_code ILIKE ? OR name_spec ILIKE ?", like, like)
+			// 商品列的模糊搜尋只用型號 (使用者偏好,品名規格不參與)
+			query = query.Where("model_code ILIKE ?", "%"+search+"%")
 		}
 
 		query.
@@ -435,7 +533,7 @@ func SearchProducts(c *gin.Context) {
 				}
 				return db
 			}).
-			Limit(20).
+			Limit(100).
 			Find(&items)
 
 		setListCacheRaw(c, items)
@@ -464,35 +562,63 @@ func SearchProducts(c *gin.Context) {
 		}
 	}
 
-	// --- 即時查訂貨明細（不快取）：出貨用，帶入售價/數量 ---
-	if customerID != "" {
-		var productIDs []int64
+	// --- 訂貨情境：回傳 supplement_info（舖/補 判定 + 第一次舖的 order_price）---
+	if orderContext == "1" && customerID != "" && len(items) > 0 {
+		productIDs := make([]int64, 0, len(items))
 		for _, p := range items {
 			productIDs = append(productIDs, p.ID)
 		}
-		if len(productIDs) > 0 {
-			var orderItems []models.OrderItem
-			db.GetRead().
-				Preload("Sizes").
-				Joins("JOIN orders ON orders.id = order_items.order_id AND orders.deleted_at IS NULL AND orders.customer_id = ?", customerID).
-				Where("order_items.product_id IN ?", productIDs).
-				Order("orders.order_date DESC, order_items.id DESC").
-				Find(&orderItems)
 
-			// 每個 product 取最新一筆 orderItem
-			orderItemMap := map[int64]models.OrderItem{}
-			for _, oi := range orderItems {
-				if _, exists := orderItemMap[oi.ProductID]; !exists {
-					orderItemMap[oi.ProductID] = oi
-				}
-			}
-
-			resp.Success("成功").SetData(map[string]interface{}{
-				"products":    items,
-				"order_items": orderItemMap,
-			}).Send()
-			return
+		// (a) 出貨歷史：客戶 × 型號 是否有任何未刪除的出貨明細
+		type shipRow struct {
+			ProductID int64
 		}
+		var shipRows []shipRow
+		db.GetRead().Table("shipment_items AS si").
+			Select("DISTINCT si.product_id").
+			Joins("JOIN shipments s ON s.id = si.shipment_id AND s.deleted_at IS NULL").
+			Where("s.customer_id = ? AND si.product_id IN ?", customerID, productIDs).
+			Scan(&shipRows)
+		hasShipmentSet := map[int64]bool{}
+		for _, r := range shipRows {
+			hasShipmentSet[r.ProductID] = true
+		}
+
+		// (b) 最早一次「舖」的 order_price（依 order_date ASC, id ASC）
+		type priceRow struct {
+			ProductID  int64
+			OrderPrice float64
+		}
+		var priceRows []priceRow
+		db.GetRead().Raw(`
+			SELECT DISTINCT ON (oi.product_id) oi.product_id, oi.order_price
+			FROM order_items oi
+			JOIN orders o ON o.id = oi.order_id AND o.deleted_at IS NULL
+			WHERE o.customer_id = ? AND oi.product_id IN (?) AND oi.supplement = 1
+			ORDER BY oi.product_id, o.order_date ASC, oi.id ASC
+		`, customerID, productIDs).Scan(&priceRows)
+		firstPuPriceMap := map[int64]float64{}
+		for _, r := range priceRows {
+			firstPuPriceMap[r.ProductID] = r.OrderPrice
+		}
+
+		type supplementInfo struct {
+			HasShipmentHistory bool    `json:"has_shipment_history"`
+			FirstPuPrice       float64 `json:"first_pu_price"`
+		}
+		infoMap := map[int64]supplementInfo{}
+		for _, pid := range productIDs {
+			infoMap[pid] = supplementInfo{
+				HasShipmentHistory: hasShipmentSet[pid],
+				FirstPuPrice:       firstPuPriceMap[pid],
+			}
+		}
+
+		resp.Success("成功").SetData(map[string]interface{}{
+			"products":        items,
+			"supplement_info": infoMap,
+		}).Send()
+		return
 	}
 
 	resp.Success("成功").SetData(items).Send()

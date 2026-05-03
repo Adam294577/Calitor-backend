@@ -47,7 +47,7 @@ type productSalesSummaryRow struct {
 //
 // 查詢條件：
 //   - brand_ids：對帳品牌 (products.brand_id IN)
-//   - model_code：型號模糊 (ILIKE)
+//   - model_code_from / model_code_to：型號區間 (lex, case-insensitive)
 //   - branch_ids：庫點 / 店櫃 (retail_customers.id)
 //   - vendor_ids：廠商 (透過 product_vendors)
 //   - category1_ids ~ category5_ids：商品分類（透過 product_category_map）
@@ -61,7 +61,8 @@ func GetProductSalesSummary(c *gin.Context) {
 	defer db.Close()
 
 	// ---------- 參數解析 ----------
-	modelCode := strings.TrimSpace(c.Query("model_code"))
+	modelCodeFrom := c.Query("model_code_from")
+	modelCodeTo := c.Query("model_code_to")
 	brandIDs := splitNonEmpty(c.Query("brand_ids"))
 	branchIDs := splitNonEmpty(c.Query("branch_ids"))
 	vendorIDs := splitNonEmpty(c.Query("vendor_ids"))
@@ -81,6 +82,9 @@ func GetProductSalesSummary(c *gin.Context) {
 		loc, _ := time.LoadLocation("Asia/Taipei")
 		dateTo = time.Now().In(loc).Format("20060102")
 	}
+	// 有意為之:dateTo 永遠有值 → 下方 EXISTS 過濾恆生效。
+	// 商品銷售總表只列「在 [dateFrom, dateTo] 範圍內、依 tx_type 曾有銷貨/出貨紀錄的商品」,
+	// 從未售出的「死碼」商品不會出現在列表中(見 2026-04-30 review 後端討論 #3 的決策)。
 
 	txType := strings.ToLower(c.DefaultQuery("tx_type", "all"))
 	switch txType {
@@ -113,9 +117,9 @@ func GetProductSalesSummary(c *gin.Context) {
 	where := "WHERE p.deleted_at IS NULL"
 	args := []interface{}{}
 
-	if modelCode != "" {
-		where += " AND p.model_code ILIKE ?"
-		args = append(args, "%"+modelCode+"%")
+	if frag, fargs := BuildModelCodeRangeWhere("p.model_code", modelCodeFrom, modelCodeTo); frag != "" {
+		where += " AND " + frag
+		args = append(args, fargs...)
 	}
 	if len(brandIDs) > 0 {
 		where += " AND p.brand_id IN (" + placeholders(len(brandIDs)) + ")"
@@ -145,6 +149,46 @@ func GetProductSalesSummary(c *gin.Context) {
 		where += " AND p.trade_mode = 1"
 	case "consignment":
 		where += " AND p.trade_mode = 2"
+	}
+
+	// 銷售/出貨範圍過濾:只列在 [dateFrom, dateTo] 內、tx_type 對應的表中有此 product_id 的商品
+	if dateFrom != "" || dateTo != "" {
+		exists := []string{}
+		if txType == "all" || txType == "sell" {
+			cond := "EXISTS (SELECT 1 FROM retail_sell_items rsi JOIN retail_sells rs ON rs.id = rsi.retail_sell_id AND rs.deleted_at IS NULL WHERE rsi.product_id = p.id"
+			if dateFrom != "" {
+				cond += " AND rs.sell_date >= ?"
+				args = append(args, dateFrom)
+			}
+			if dateTo != "" {
+				cond += " AND rs.sell_date <= ?"
+				args = append(args, dateTo)
+			}
+			cond += ")"
+			exists = append(exists, cond)
+		}
+		if txType == "all" || txType == "shipment" {
+			cond := "EXISTS (SELECT 1 FROM shipment_items shi JOIN shipments sh ON sh.id = shi.shipment_id AND sh.deleted_at IS NULL WHERE shi.product_id = p.id"
+			if dateFrom != "" {
+				cond += " AND sh.shipment_date >= ?"
+				args = append(args, dateFrom)
+			}
+			if dateTo != "" {
+				cond += " AND sh.shipment_date <= ?"
+				args = append(args, dateTo)
+			}
+			switch tradeType {
+			case "purchase":
+				cond += " AND sh.deal_mode = 1"
+			case "consignment":
+				cond += " AND sh.deal_mode = 2"
+			}
+			cond += ")"
+			exists = append(exists, cond)
+		}
+		if len(exists) > 0 {
+			where += " AND (" + strings.Join(exists, " OR ") + ")"
+		}
 	}
 
 	// 總筆數
@@ -184,9 +228,9 @@ LEFT JOIN brands b ON b.id = p.brand_id
 LEFT JOIN product_vendors pv ON pv.product_id = p.id AND pv.is_primary = true
 LEFT JOIN vendors v ON v.id = pv.vendor_id
 %s
-ORDER BY p.model_code
+ORDER BY %s
 LIMIT ? OFFSET ?
-`, where)
+`, where, ModelCodeOrderBy("p.model_code"))
 
 	argsPage := append(append([]interface{}{}, args...), pageSize, offset)
 	var heads []productHead

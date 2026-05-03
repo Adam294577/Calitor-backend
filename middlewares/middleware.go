@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"path"
 	"project/services/common"
+	"project/services/firewall"
 	"project/services/log"
 	"strings"
 	"time"
@@ -28,49 +29,18 @@ func SkipMiddleware(path string) bool {
 }
 
 // IPWhiteList 限制僅允許白名單內的公網 IP 存取
-// 支援單一 IP 與 CIDR 表示法（例如 "192.168.1.0/24"），逗點分隔多筆
+// 白名單來源：firewall_ips 資料表（含環境變數同步進來的紀錄）
+// 支援單一 IP 與 CIDR 表示法；資料經 firewall.Load() 取得，走 Redis 短 TTL 快取
 func IPWhiteList() gin.HandlerFunc {
-	allowedIPStr := viper.GetString("Server.Security.AllowedOfficeIP")
-
-	// 若未設定白名單，不限制（方便本地開發）
-	if strings.TrimSpace(allowedIPStr) == "" {
-		log.Warn("IPWhiteList: AllowedOfficeIP 未設定，IP 防火牆已停用")
-		return func(ctx *gin.Context) {
-			ctx.Next()
-		}
-	}
-
-	// 預先解析白名單：區分精確 IP 與 CIDR 網段
-	parts := strings.Split(allowedIPStr, ",")
-	allowedIPs := make(map[string]bool, len(parts))
-	var allowedNets []*net.IPNet
-
-	for _, entry := range parts {
-		entry = strings.TrimSpace(entry)
-		if entry == "" {
-			continue
-		}
-		if strings.Contains(entry, "/") {
-			_, ipNet, err := net.ParseCIDR(entry)
-			if err != nil {
-				log.Error("IPWhiteList: 無法解析 CIDR %s: %s", entry, err.Error())
-				continue
-			}
-			allowedNets = append(allowedNets, ipNet)
-		} else {
-			// 用 net.ParseIP 標準化後存入（處理 IPv4-mapped IPv6 等情況）
-			if parsed := net.ParseIP(entry); parsed != nil {
-				allowedIPs[parsed.String()] = true
-			} else {
-				log.Error("IPWhiteList: 無法解析 IP %s", entry)
-			}
-		}
-	}
-
-	log.Info("IPWhiteList: 已載入 %d 個 IP + %d 個 CIDR 網段", len(allowedIPs), len(allowedNets))
-
 	return func(ctx *gin.Context) {
 		resp := response.New(ctx)
+		snap := firewall.Load()
+
+		// 清單為空：視為未設定，不限制（方便本地開發）
+		if len(snap.IPs) == 0 && len(snap.CIDR) == 0 {
+			ctx.Next()
+			return
+		}
 
 		// 取得客戶端 IP：
 		// 1. 優先使用 Cloudflare 的 CF-Connecting-IP（最可靠）
@@ -86,7 +56,6 @@ func IPWhiteList() gin.HandlerFunc {
 			rawIP = ctx.RemoteIP()
 		}
 
-		// 用 net.ParseIP 標準化，確保 IPv6/IPv4 格式一致
 		parsed := net.ParseIP(rawIP)
 		if parsed == nil {
 			log.Warn("IPWhiteList: 無法解析來源 IP [%s]", rawIP)
@@ -96,15 +65,24 @@ func IPWhiteList() gin.HandlerFunc {
 		}
 		clientIP := parsed.String()
 
-		// 精確 IP 比對
-		if allowedIPs[clientIP] {
+		// 永遠放行 loopback（127.0.0.1、::1）：
+		// 本機自己發的請求沒有必要擋,否則 admin 在本機 CRUD 一加 IP 就會把自己鎖死
+		if parsed.IsLoopback() {
 			ctx.Next()
 			return
 		}
 
+		// 精確 IP 比對
+		for _, ip := range snap.IPs {
+			if ip == clientIP {
+				ctx.Next()
+				return
+			}
+		}
+
 		// CIDR 網段比對
-		for _, ipNet := range allowedNets {
-			if ipNet.Contains(parsed) {
+		for _, cidr := range snap.CIDR {
+			if _, ipNet, err := net.ParseCIDR(cidr); err == nil && ipNet.Contains(parsed) {
 				ctx.Next()
 				return
 			}
@@ -122,6 +100,25 @@ func Middleware() gin.HandlerFunc {
 		ctx.Set("requestID", ctx.Request.Header.Get("X-Request-ID"))
 		ctx.Next()
 	}
+}
+
+// HasPermission 回傳當前使用者是否擁有指定權限
+// 供 controller 在業務邏輯中做細項決策時使用（不會回應 403）
+func HasPermission(c *gin.Context, key string) bool {
+	perms, exists := c.Get("Permissions")
+	if !exists {
+		return false
+	}
+	permSlice, ok := perms.([]interface{})
+	if !ok {
+		return false
+	}
+	for _, p := range permSlice {
+		if str, ok := p.(string); ok && str == key {
+			return true
+		}
+	}
+	return false
 }
 
 // RequirePermission 檢查使用者是否擁有指定的任一權限

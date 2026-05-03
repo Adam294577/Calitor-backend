@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"project/models"
+	"project/services/permission"
 	response "project/services/responses"
 	"strconv"
 
@@ -51,7 +52,7 @@ func GetProductCategoriesByLevel(c *gin.Context) {
 	defer db.Close()
 
 	model, items, _ := categoryModelByLevel(level)
-	query := db.GetRead().Model(model).Order("id ASC")
+	query := db.GetRead().Model(model).Order("code ASC")
 	query = ApplySearch(query, c.Query("search"), "code", "name")
 	paged, total := Paginate(c, query, model)
 	paged.Find(items)
@@ -142,6 +143,9 @@ func UpdateProductCategoryByLevel(c *gin.Context) {
 		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
 		return
 	}
+
+	// 無「編輯主檔代碼」權限者，忽略 code 欄位變更
+	permission.StripMasterCodeFields(c, &req, "code")
 
 	db := models.PostgresNew()
 	defer db.Close()

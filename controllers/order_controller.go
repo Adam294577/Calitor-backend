@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 	"project/models"
 	response "project/services/responses"
@@ -238,7 +239,7 @@ func CreateOrder(c *gin.Context) {
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
 			}
-			totalAmount := float64(totalQty) * reqItem.OrderPrice
+			totalAmount := math.Round(float64(totalQty) * reqItem.OrderPrice)
 
 			item := models.OrderItem{
 				OrderID:      order.ID,
@@ -413,7 +414,7 @@ func UpdateOrder(c *gin.Context) {
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
 			}
-			totalAmount := float64(totalQty) * reqItem.OrderPrice
+			totalAmount := math.Round(float64(totalQty) * reqItem.OrderPrice)
 
 			item := models.OrderItem{
 				OrderID:      id,
@@ -511,7 +512,7 @@ func SearchOrders(c *gin.Context) {
 			return db.Order("sort_order ASC")
 		}).
 		Preload("Items.Sizes.SizeOption").
-		Order("order_date DESC, id DESC")
+		Order("order_date DESC, order_no DESC")
 
 	if v := c.Query("customer_id"); v != "" {
 		query = query.Where("customer_id = ?", v)

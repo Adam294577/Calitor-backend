@@ -3,11 +3,14 @@ package controllers
 import (
 	"net/http"
 	"project/models"
+	"project/services/permission"
+	"project/services/purchase"
 	response "project/services/responses"
 	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 func GetVendors(c *gin.Context) {
@@ -19,8 +22,14 @@ func GetVendors(c *gin.Context) {
 	defer db.Close()
 
 	var items []models.Vendor
-	query := db.GetRead().Preload("Category").Order("id ASC")
-	query = ApplySearch(query, c.Query("search"), "code", "name", "short_name")
+	search := c.Query("search")
+	query := db.GetRead().Preload("Category")
+	if search != "" {
+		// code 前綴匹配優先 (例:輸入 54 時,540/541 排在 054/154 前)
+		query = query.Order(gorm.Expr("CASE WHEN code ILIKE ? THEN 0 ELSE 1 END", search+"%"))
+	}
+	query = query.Order(ModelCodeOrderBy("code"))
+	query = ApplySearch(query, search, "code", "name", "short_name")
 	if catId := c.Query("category_id"); catId != "" {
 		query = query.Where("category_id = ?", catId)
 	}
@@ -48,7 +57,7 @@ func GetVendorOptions(c *gin.Context) {
 	var items []option
 	db.GetRead().Model(&models.Vendor{}).
 		Select("id, code, name, short_name").
-		Order("id ASC").
+		Order(ModelCodeOrderBy("code")).
 		Find(&items)
 	setListCache(c, items, 0)
 	resp.Success("成功").SetData(items).Send()
@@ -133,6 +142,9 @@ func UpdateVendor(c *gin.Context) {
 		return
 	}
 
+	// 無「編輯主檔代碼」權限者，忽略 code 欄位變更
+	permission.StripMasterCodeFields(c, &req, "code")
+
 	if req.Code != nil && *req.Code != "" && *req.Code != existing.Code {
 		var count int64
 		db.GetRead().Model(&models.Vendor{}).Where("code = ? AND id != ?", *req.Code, id).Count(&count)
@@ -168,4 +180,32 @@ func DeleteVendor(c *gin.Context) {
 	db.GetWrite().Delete(&models.Vendor{}, id)
 	invalidateListCache("vendors")
 	resp.Success("刪除成功").Send()
+}
+
+// GetVendorRecentPurchasePrice 查指定廠商對特定商品+尺碼的「最近一次採購價」
+// 用於條碼進貨切換到無候選廠商時的價格預設
+// 三層 fallback:該廠商歷史採購 → 商品建檔原幣價 (Product.OriginalPrice) → 0
+func GetVendorRecentPurchasePrice(c *gin.Context) {
+	resp := response.New(c)
+	vendorID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		resp.Fail(http.StatusBadRequest, "無效的廠商 ID").Send()
+		return
+	}
+	productID, err := strconv.ParseInt(c.Query("product_id"), 10, 64)
+	if err != nil {
+		resp.Fail(http.StatusBadRequest, "無效的商品 ID").Send()
+		return
+	}
+	sizeOptionID, err := strconv.ParseInt(c.Query("size_option_id"), 10, 64)
+	if err != nil {
+		resp.Fail(http.StatusBadRequest, "無效的尺碼選項 ID").Send()
+		return
+	}
+
+	db := models.PostgresNew()
+	defer db.Close()
+
+	result := purchase.RecentPrice(db.GetRead(), vendorID, productID, sizeOptionID)
+	resp.Success("成功").SetData(result).Send()
 }
