@@ -95,7 +95,7 @@ func TransferBarcodeParse(c *gin.Context) {
 			SizeOptionID: pe.Parsed.SizeOptionID,
 			SizeLabel:    pe.Parsed.SizeLabel,
 			Qty:          pe.Qty,
-			UnitPrice:    0,
+			UnitPrice:    prod.MSRP, // 預設帶商品建議售價,前端可逐行調整
 		})
 	}
 
