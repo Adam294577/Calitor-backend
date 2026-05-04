@@ -151,7 +151,7 @@ func CreateTransfer(c *gin.Context) {
 	var maxNo string
 	db.GetRead().Unscoped().Model(&models.Transfer{}).
 		Where("transfer_no LIKE ?", prefix+"%").
-		Select("MAX(transfer_no)").
+		Select("COALESCE(MAX(transfer_no), '')").
 		Scan(&maxNo)
 
 	seq := 1
@@ -178,6 +178,7 @@ func CreateTransfer(c *gin.Context) {
 		FillPersonID:     req.FillPersonID,
 		RecorderID:       recorderID,
 		Remark:           req.Remark,
+		InputMode:        models.TransferInputModeKeyboard,
 	}
 
 	err := db.GetWrite().Transaction(func(tx *gorm.DB) error {
@@ -360,10 +361,9 @@ func UpdateTransfer(c *gin.Context) {
 			}
 		}
 
-		// === 3. 庫存足量檢查（單一 SELECT） ===
-		if err := inventory.CheckStockSufficientBatch(tx, deltas); err != nil {
-			return err
-		}
+		// === 3. 修改調撥單時不檢查庫存負數 ===
+		// 修改舊單時,「還原舊 dest -qty」可能因 dest 庫存後續被使用而變負;
+		// 業務上接受暫時負數,以實際出貨/盤點再對齊。新建/批次端點仍保留檢查。
 
 		// === 4. 刪除舊明細 ===
 		var oldItemIDs []int64

@@ -245,6 +245,11 @@ func SeedMasterDataPermissions(db *DBManager) {
 	db.GetWrite().Where("key = ?", editMasterCode.Key).FirstOrCreate(&editMasterCode)
 	updateSeedIfNotCustomized(db, editMasterCode)
 
+	// === 頂層：檢視幣別清單 ===（獨立節點;允許進貨/採購等下拉使用幣別,不需要進入幣別管理頁面）
+	currenciesList := Permission{Key: "currencies-list", Name: "檢視幣別清單", Sort: 6}
+	db.GetWrite().Where("key = ?", currenciesList.Key).FirstOrCreate(&currenciesList)
+	updateSeedIfNotCustomized(db, currenciesList)
+
 	// === 頂層：輔助資料增修 ===
 	auxiliaryData := Permission{Key: "auxiliary-data", Name: "輔助資料增修", Sort: 5}
 	db.GetWrite().Where("key = ?", auxiliaryData.Key).FirstOrCreate(&auxiliaryData)
@@ -520,7 +525,7 @@ func updateSeedIfNotCustomized(db *DBManager, p Permission) {
 
 // backfillPermissionKind 根據 key 規則覆寫所有權限的 kind 欄位。
 // 規則：
-//   - func: edit-master-code 與所有 CRUD 葉子（key 含 "."）
+//   - func: edit-master-code、currencies-list 等獨立功能權限,以及所有 CRUD 葉子（key 含 "."）
 //   - page: 其餘為側邊欄選單分類/頁面
 //
 // kind 為結構性欄位（不開放使用者改），故每次 seed 都無條件覆寫，確保正確。
@@ -528,7 +533,7 @@ func backfillPermissionKind(db *DBManager) {
 	db.GetWrite().Exec(`
 		UPDATE permissions
 		SET kind = CASE
-			WHEN key = 'edit-master-code' OR key LIKE '%.%' THEN 'func'
+			WHEN key IN ('edit-master-code', 'currencies-list') OR key LIKE '%.%' THEN 'func'
 			ELSE 'page'
 		END
 	`)

@@ -104,7 +104,7 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.DELETE("/vendor-categories/:id", middlewares.RequirePermission("vendor-categories.delete"), controllers.DeleteVendorCategory)
 
 		// 輔助資料 - 幣別
-		adminAuth.GET("/currencies", middlewares.RequirePermission("currencies.view"), controllers.GetCurrencies)
+		adminAuth.GET("/currencies", middlewares.RequirePermission("currencies.view", "currencies-list"), controllers.GetCurrencies)
 		adminAuth.POST("/currencies", middlewares.RequirePermission("currencies.create"), controllers.CreateCurrency)
 		adminAuth.PUT("/currencies/:id", middlewares.RequirePermission("currencies.edit"), controllers.UpdateCurrency)
 		adminAuth.DELETE("/currencies/:id", middlewares.RequirePermission("currencies.delete"), controllers.DeleteCurrency)
@@ -256,6 +256,8 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.GET("/transfers", middlewares.RequirePermission("transfer.view"), controllers.GetTransfers)
 		adminAuth.GET("/transfers/:id", middlewares.RequirePermission("transfer.view"), controllers.GetTransfer)
 		adminAuth.POST("/transfers", middlewares.RequirePermission("transfer.create"), controllers.CreateTransfer)
+		adminAuth.POST("/transfers/barcode-parse", middlewares.RequirePermission("transfer.create"), controllers.TransferBarcodeParse)
+		adminAuth.POST("/transfers/batch", middlewares.RequirePermission("transfer.create"), controllers.CreateTransferBatch)
 		adminAuth.PUT("/transfers/:id", middlewares.RequirePermission("transfer.edit"), controllers.UpdateTransfer)
 		adminAuth.DELETE("/transfers/:id", middlewares.RequirePermission("transfer.delete"), controllers.DeleteTransfer)
 		adminAuth.PUT("/transfers/:id/confirm", middlewares.RequirePermission("transfer.edit"), controllers.ConfirmTransfer)
