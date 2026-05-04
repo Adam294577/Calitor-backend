@@ -151,7 +151,7 @@ func CreateTransfer(c *gin.Context) {
 	var maxNo string
 	db.GetRead().Unscoped().Model(&models.Transfer{}).
 		Where("transfer_no LIKE ?", prefix+"%").
-		Select("MAX(transfer_no)").
+		Select("COALESCE(MAX(transfer_no), '')").
 		Scan(&maxNo)
 
 	seq := 1
@@ -178,6 +178,7 @@ func CreateTransfer(c *gin.Context) {
 		FillPersonID:     req.FillPersonID,
 		RecorderID:       recorderID,
 		Remark:           req.Remark,
+		InputMode:        models.TransferInputModeKeyboard,
 	}
 
 	err := db.GetWrite().Transaction(func(tx *gorm.DB) error {

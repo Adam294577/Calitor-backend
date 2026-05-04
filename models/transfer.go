@@ -6,6 +6,12 @@ import (
 	"gorm.io/gorm"
 )
 
+// Transfer InputMode 來源
+const (
+	TransferInputModeKeyboard = 1 // 鍵盤輸入(controllers.CreateTransfer 單筆 endpoint 預設)
+	TransferInputModeBarcode  = 2 // 條碼掃描(services/transfer.CreateBatch 批次建單預設)
+)
+
 // Transfer 店櫃調撥主表
 type Transfer struct {
 	ID               int64           `gorm:"primaryKey" json:"id"`
@@ -22,7 +28,8 @@ type Transfer struct {
 	RecorderID       int64           `gorm:"not null;index" json:"recorder_id"`
 	Recorder         *Admin          `gorm:"foreignKey:RecorderID" json:"recorder,omitempty"`
 	Remark           string          `gorm:"type:text" json:"remark"`
-	Confirmed        bool            `gorm:"default:false" json:"confirmed"` // 確認調轉
+	Confirmed        bool            `gorm:"default:false" json:"confirmed"`           // 確認調轉
+	InputMode        int             `gorm:"type:integer;default:1" json:"input_mode"` // 1=鍵盤 2=掃描器
 	Items            []TransferItem  `gorm:"foreignKey:TransferID" json:"items,omitempty"`
 }
 
