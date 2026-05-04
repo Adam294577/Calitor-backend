@@ -140,26 +140,35 @@ func ApplyStockDeltas(tx *gorm.DB, deltas []StockDelta) error {
 }
 
 // CheckStockSufficientBatch 檢查 deltas 套用後，所有受影響的 (customer, product, size) 庫存仍 >= 0。
-// 只檢查負 delta（扣除）；正 delta 不檢查。一次 SELECT 撈完所有相關列，避免 N+1。
+// 先把所有 delta（正、負皆有）依 (product, customer, size) 聚合成淨值，再只對淨負的 key 檢查。
+// 這樣 update 時「舊還原 + 新套用」會正確抵消，no-op 更新不會誤報「庫存不足」。
+// 一次 SELECT 撈完所有相關列，避免 N+1。
 func CheckStockSufficientBatch(tx *gorm.DB, deltas []StockDelta) error {
 	if len(deltas) == 0 {
 		return nil
 	}
 	type k = [3]int64
-	deduct := make(map[k]int)
+
+	// 聚合全部 delta 算淨值
+	net := make(map[k]int)
 	for _, d := range deltas {
-		if d.Qty >= 0 {
-			continue
-		}
-		deduct[k{d.ProductID, d.CustomerID, d.SizeOptionID}] += -d.Qty
+		net[k{d.ProductID, d.CustomerID, d.SizeOptionID}] += d.Qty
 	}
-	if len(deduct) == 0 {
+
+	// 只對淨負（真的有扣的）的 key 做檢查
+	need := make(map[k]int)
+	for key, n := range net {
+		if n < 0 {
+			need[key] = -n
+		}
+	}
+	if len(need) == 0 {
 		return nil
 	}
 
-	placeholders := make([]string, 0, len(deduct))
-	args := make([]interface{}, 0, len(deduct)*3)
-	for key := range deduct {
+	placeholders := make([]string, 0, len(need))
+	args := make([]interface{}, 0, len(need)*3)
+	for key := range need {
 		placeholders = append(placeholders, "(?, ?, ?)")
 		args = append(args, key[0], key[1], key[2])
 	}
@@ -184,10 +193,10 @@ func CheckStockSufficientBatch(tx *gorm.DB, deltas []StockDelta) error {
 	for _, r := range rows {
 		have[k{r.ProductID, r.CustomerID, r.SizeOptionID}] = r.Qty
 	}
-	for key, need := range deduct {
-		if have[key] < need {
+	for key, n := range need {
+		if have[key] < n {
 			return fmt.Errorf("商品 ID %d 尺碼 %d 庫存不足（現有 %d，需 %d）",
-				key[0], key[2], have[key], need)
+				key[0], key[2], have[key], n)
 		}
 	}
 	return nil
