@@ -8,8 +8,13 @@ landtop.exe
 /storage
 # windows local development 臨時檔案
 tmp/
+tmp-dev/
+tmp-prod/
 build-errors.log
 dev/
+# 本地 air 配置(dev/prod 環境分開,不入版控)
+.air.dev.toml
+.air.prod.toml
 # ruby schema
 # /models/schema.rb
 config
