@@ -93,15 +93,12 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 		args = append(args, v)
 	}
 
-	// 異動範圍過濾:只列在 [date_from, date_to] 內、且符合所選 kinds 至少一種異動的商品
+	// 異動範圍過濾:只列符合所選 kinds 至少一種異動的商品。
+	// 若同時帶 date_from / date_to,再依業務日期限縮(與 Tab 2 明細查詢條件一致)。
 	dateFrom := c.Query("date_from")
 	dateTo := c.Query("date_to")
 	kinds := splitNonEmpty(c.Query("kinds"))
-	if dateFrom != "" || dateTo != "" {
-		if len(kinds) == 0 {
-			// 前端必傳 kinds(filterKinds.length 永不為 0),後端 fallback 帶全套保險
-			kinds = []string{"stock", "shipment", "retail_sell", "modify", "transfer_in", "transfer_out", "order", "purchase"}
-		}
+	if len(kinds) > 0 {
 		// 每種 kind 對應的 (header table, item table, header 業務日期欄)
 		kindMap := map[string][3]string{
 			"stock":        {"stocks", "stock_items", "stock_date"},
@@ -123,9 +120,7 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 			"orders":       "order_id",
 			"purchases":    "purchase_id",
 		}
-		// transfer_in / transfer_out 在 transfer_items 沒有方向欄,
-		// 商品列表階段「有 transfer 即可」,兩個方向都映射到同一張 transfers 查一次。
-		// 真正的方向 (調入/調出) 在 Tab 2 (商品進出明細) 才會展開。
+		// transfer_in / transfer_out 在 transfer_items 沒有方向欄,兩個方向共用同一張 transfers 查一次。
 		seen := map[string]bool{}
 		exists := []string{}
 		for _, k := range kinds {
@@ -140,34 +135,25 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 			seen[key] = true
 			header, item, dateCol := cfg[0], cfg[1], cfg[2]
 			fk := fkMap[header]
-			// 規範 #1 雙路徑:業務日期 OR ChangeDate(updated_at)。
-			// Sell/Stock/Purchase/Orders/Ship/Goods/Modify/Transfer 都可能事後改動,
-			// 只比對業務日期會漏抓「日期被改成範圍外、但確實在此範圍內被異動過」的單。
-			bizParts := []string{}
-			chgParts := []string{}
-			localArgs := []interface{}{}
-			chgArgs := []interface{}{}
+
+			dateParts := []string{}
 			if dateFrom != "" {
-				bizParts = append(bizParts, fmt.Sprintf("xh.%s >= ?", dateCol))
-				localArgs = append(localArgs, dateFrom)
-				chgParts = append(chgParts, "TO_CHAR(xh.updated_at, 'YYYYMMDD') >= ?")
-				chgArgs = append(chgArgs, dateFrom)
+				dateParts = append(dateParts, fmt.Sprintf("xh.%s >= ?", dateCol))
+				args = append(args, dateFrom)
 			}
 			if dateTo != "" {
-				bizParts = append(bizParts, fmt.Sprintf("xh.%s <= ?", dateCol))
-				localArgs = append(localArgs, dateTo)
-				chgParts = append(chgParts, "TO_CHAR(xh.updated_at, 'YYYYMMDD') <= ?")
-				chgArgs = append(chgArgs, dateTo)
+				dateParts = append(dateParts, fmt.Sprintf("xh.%s <= ?", dateCol))
+				args = append(args, dateTo)
 			}
-			cond := fmt.Sprintf(
-				"EXISTS (SELECT 1 FROM %[2]s xi JOIN %[1]s xh ON xh.id = xi.%[3]s AND xh.deleted_at IS NULL WHERE xi.product_id = p.id AND ((%[4]s) OR (%[5]s)))",
-				header, item, fk,
-				strings.Join(bizParts, " AND "),
-				strings.Join(chgParts, " AND "),
-			)
-			args = append(args, localArgs...)
-			args = append(args, chgArgs...)
-			exists = append(exists, cond)
+			dateClause := ""
+			if len(dateParts) > 0 {
+				dateClause = " AND " + strings.Join(dateParts, " AND ")
+			}
+
+			exists = append(exists, fmt.Sprintf(
+				"EXISTS (SELECT 1 FROM %s xi JOIN %s xh ON xh.id = xi.%s AND xh.deleted_at IS NULL WHERE xi.product_id = p.id%s)",
+				item, header, fk, dateClause,
+			))
 		}
 		if len(exists) > 0 {
 			where += " AND (" + strings.Join(exists, " OR ") + ")"
