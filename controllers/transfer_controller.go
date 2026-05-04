@@ -105,12 +105,13 @@ func CreateTransfer(c *gin.Context) {
 		FillPersonID *int64 `json:"fill_person_id"`
 		Remark       string `json:"remark"`
 		Items        []struct {
-			ProductID   int64   `json:"product_id"`
-			SizeGroupID *int64  `json:"size_group_id"`
-			ItemOrder   int     `json:"item_order"`
-			UnitPrice   float64 `json:"unit_price"`
-			DestStore   string  `json:"dest_store"`
-			Sizes       []struct {
+			ProductID     int64   `json:"product_id"`
+			SizeGroupID   *int64  `json:"size_group_id"`
+			ItemOrder     int     `json:"item_order"`
+			UnitPrice     float64 `json:"unit_price"`
+			DestStore     string  `json:"dest_store"`
+			ItemConfirmed bool    `json:"item_confirmed"`
+			Sizes         []struct {
 				SizeOptionID int64 `json:"size_option_id"`
 				Qty          int   `json:"qty"`
 			} `json:"sizes"`
@@ -184,19 +185,18 @@ func CreateTransfer(c *gin.Context) {
 			return err
 		}
 
-		var sourceAdjItems []inventory.StockAdjustItem
-		destAdjMap := make(map[int64][]inventory.StockAdjustItem) // destCustomerID -> items
+		// 預先算 totalQty / totalAmount 與庫存 delta，準備批次插入
+		newItems := make([]models.TransferItem, 0, len(req.Items))
+		var deltas []inventory.StockDelta
 
 		for _, reqItem := range req.Items {
 			destCust := destCustomerMap[reqItem.DestStore]
-
 			totalQty := 0
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
 			}
 			totalAmount := math.Round(float64(totalQty) * reqItem.UnitPrice)
-
-			item := models.TransferItem{
+			newItems = append(newItems, models.TransferItem{
 				TransferID:     transfer.ID,
 				ProductID:      reqItem.ProductID,
 				SizeGroupID:    reqItem.SizeGroupID,
@@ -206,51 +206,50 @@ func CreateTransfer(c *gin.Context) {
 				TotalAmount:    totalAmount,
 				DestStore:      reqItem.DestStore,
 				DestCustomerID: destCust.ID,
+				ItemConfirmed:  reqItem.ItemConfirmed,
+			})
+			for _, s := range reqItem.Sizes {
+				if s.Qty <= 0 {
+					continue
+				}
+				deltas = append(deltas,
+					inventory.StockDelta{CustomerID: sourceCustomer.ID, ProductID: reqItem.ProductID, SizeOptionID: s.SizeOptionID, Qty: -s.Qty},
+					inventory.StockDelta{CustomerID: destCust.ID, ProductID: reqItem.ProductID, SizeOptionID: s.SizeOptionID, Qty: s.Qty},
+				)
 			}
-			if err := tx.Create(&item).Error; err != nil {
+		}
+
+		// 庫存足量檢查（套用 deltas 後仍 >= 0）
+		if err := inventory.CheckStockSufficientBatch(tx, deltas); err != nil {
+			return err
+		}
+
+		// 批次插入 TransferItem，拿回 ID 後再批次插入 sizes
+		if len(newItems) > 0 {
+			if err := tx.CreateInBatches(&newItems, 100).Error; err != nil {
 				return err
 			}
-
-			var srcSizes []inventory.StockAdjustSize
-			var destSizes []inventory.StockAdjustSize
-
+		}
+		var newSizes []models.TransferItemSize
+		for i, reqItem := range req.Items {
+			itemID := newItems[i].ID
 			for _, s := range reqItem.Sizes {
-				size := models.TransferItemSize{
-					TransferItemID: item.ID,
+				newSizes = append(newSizes, models.TransferItemSize{
+					TransferItemID: itemID,
 					SizeOptionID:   s.SizeOptionID,
 					Qty:            s.Qty,
-				}
-				if err := tx.Create(&size).Error; err != nil {
-					return err
-				}
-				if s.Qty > 0 {
-					adjSize := inventory.StockAdjustSize{SizeOptionID: s.SizeOptionID, Qty: s.Qty}
-					srcSizes = append(srcSizes, adjSize)
-					destSizes = append(destSizes, adjSize)
-				}
-			}
-
-			if len(srcSizes) > 0 {
-				sourceAdjItems = append(sourceAdjItems, inventory.StockAdjustItem{ProductID: reqItem.ProductID, Sizes: srcSizes})
-				destAdjMap[destCust.ID] = append(destAdjMap[destCust.ID], inventory.StockAdjustItem{ProductID: reqItem.ProductID, Sizes: destSizes})
+				})
 			}
 		}
-
-		// 調出方庫存足量檢查
-		if len(sourceAdjItems) > 0 {
-			if err := inventory.CheckStockSufficient(tx, sourceCustomer.ID, sourceAdjItems); err != nil {
-				return err
-			}
-			if err := inventory.AdjustStockBatch(tx, sourceCustomer.ID, sourceAdjItems, -1); err != nil {
+		if len(newSizes) > 0 {
+			if err := tx.CreateInBatches(&newSizes, 200).Error; err != nil {
 				return err
 			}
 		}
 
-		// 調入方加庫存（按目的地分組）
-		for destCustID, adjItems := range destAdjMap {
-			if err := inventory.AdjustStockBatch(tx, destCustID, adjItems, 1); err != nil {
-				return err
-			}
+		// 一次 UPSERT 套用全部庫存 delta
+		if err := inventory.ApplyStockDeltas(tx, deltas); err != nil {
+			return err
 		}
 
 		return nil
@@ -287,12 +286,13 @@ func UpdateTransfer(c *gin.Context) {
 		FillPersonID *int64 `json:"fill_person_id"`
 		Remark       string `json:"remark"`
 		Items        []struct {
-			ProductID   int64   `json:"product_id"`
-			SizeGroupID *int64  `json:"size_group_id"`
-			ItemOrder   int     `json:"item_order"`
-			UnitPrice   float64 `json:"unit_price"`
-			DestStore   string  `json:"dest_store"`
-			Sizes       []struct {
+			ProductID     int64   `json:"product_id"`
+			SizeGroupID   *int64  `json:"size_group_id"`
+			ItemOrder     int     `json:"item_order"`
+			UnitPrice     float64 `json:"unit_price"`
+			DestStore     string  `json:"dest_store"`
+			ItemConfirmed bool    `json:"item_confirmed"`
+			Sizes         []struct {
 				SizeOptionID int64 `json:"size_option_id"`
 				Qty          int   `json:"qty"`
 			} `json:"sizes"`
@@ -328,41 +328,44 @@ func UpdateTransfer(c *gin.Context) {
 	}
 
 	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
-		// === 還原舊庫存 ===
+		// === 1. 撈舊明細（為計算還原 delta） ===
 		var oldItems []models.TransferItem
 		if err := tx.Preload("Sizes").Where("transfer_id = ?", id).Find(&oldItems).Error; err != nil {
 			return err
 		}
 
-		// 還原調出方（加回）
-		var oldSourceAdj []inventory.StockAdjustItem
-		oldDestAdj := make(map[int64][]inventory.StockAdjustItem)
+		// === 2. 算淨 delta：舊還原（調出加回、調入扣回）+ 新套用（調出扣、調入加） ===
+		var deltas []inventory.StockDelta
 		for _, oi := range oldItems {
-			var sizes []inventory.StockAdjustSize
 			for _, s := range oi.Sizes {
-				if s.Qty > 0 {
-					sizes = append(sizes, inventory.StockAdjustSize{SizeOptionID: s.SizeOptionID, Qty: s.Qty})
+				if s.Qty <= 0 {
+					continue
 				}
-			}
-			if len(sizes) > 0 {
-				oldSourceAdj = append(oldSourceAdj, inventory.StockAdjustItem{ProductID: oi.ProductID, Sizes: sizes})
-				oldDestAdj[oi.DestCustomerID] = append(oldDestAdj[oi.DestCustomerID], inventory.StockAdjustItem{ProductID: oi.ProductID, Sizes: sizes})
-			}
-		}
-		if len(oldSourceAdj) > 0 {
-			// 調出方加回
-			if err := inventory.AdjustStockBatch(tx, existing.SourceCustomerID, oldSourceAdj, 1); err != nil {
-				return err
+				deltas = append(deltas,
+					inventory.StockDelta{CustomerID: existing.SourceCustomerID, ProductID: oi.ProductID, SizeOptionID: s.SizeOptionID, Qty: s.Qty},
+					inventory.StockDelta{CustomerID: oi.DestCustomerID, ProductID: oi.ProductID, SizeOptionID: s.SizeOptionID, Qty: -s.Qty},
+				)
 			}
 		}
-		// 調入方扣回
-		for destCustID, adjItems := range oldDestAdj {
-			if err := inventory.AdjustStockBatch(tx, destCustID, adjItems, -1); err != nil {
-				return err
+		for _, reqItem := range req.Items {
+			destCust := destCustomerMap[reqItem.DestStore]
+			for _, s := range reqItem.Sizes {
+				if s.Qty <= 0 {
+					continue
+				}
+				deltas = append(deltas,
+					inventory.StockDelta{CustomerID: sourceCustomer.ID, ProductID: reqItem.ProductID, SizeOptionID: s.SizeOptionID, Qty: -s.Qty},
+					inventory.StockDelta{CustomerID: destCust.ID, ProductID: reqItem.ProductID, SizeOptionID: s.SizeOptionID, Qty: s.Qty},
+				)
 			}
 		}
 
-		// === 刪除舊明細 ===
+		// === 3. 庫存足量檢查（單一 SELECT） ===
+		if err := inventory.CheckStockSufficientBatch(tx, deltas); err != nil {
+			return err
+		}
+
+		// === 4. 刪除舊明細 ===
 		var oldItemIDs []int64
 		if err := tx.Model(&models.TransferItem{}).Where("transfer_id = ?", id).Pluck("id", &oldItemIDs).Error; err != nil {
 			return err
@@ -376,13 +379,12 @@ func UpdateTransfer(c *gin.Context) {
 			return err
 		}
 
-		// === 更新主表 ===
+		// === 5. 更新主表 ===
 		adminId, _ := c.Get("AdminId")
 		recorderID := existing.RecorderID
 		if aid, ok := adminId.(float64); ok {
 			recorderID = int64(aid)
 		}
-
 		updates := map[string]interface{}{
 			"transfer_date":      req.TransferDate,
 			"source_store":       req.SourceStore,
@@ -395,20 +397,16 @@ func UpdateTransfer(c *gin.Context) {
 			return err
 		}
 
-		// === 重建明細 + 庫存 ===
-		var newSourceAdj []inventory.StockAdjustItem
-		newDestAdj := make(map[int64][]inventory.StockAdjustItem)
-
+		// === 6. 批次重建明細 ===
+		newItems := make([]models.TransferItem, 0, len(req.Items))
 		for _, reqItem := range req.Items {
 			destCust := destCustomerMap[reqItem.DestStore]
-
 			totalQty := 0
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
 			}
 			totalAmount := math.Round(float64(totalQty) * reqItem.UnitPrice)
-
-			item := models.TransferItem{
+			newItems = append(newItems, models.TransferItem{
 				TransferID:     id,
 				ProductID:      reqItem.ProductID,
 				SizeGroupID:    reqItem.SizeGroupID,
@@ -418,48 +416,34 @@ func UpdateTransfer(c *gin.Context) {
 				TotalAmount:    totalAmount,
 				DestStore:      reqItem.DestStore,
 				DestCustomerID: destCust.ID,
-			}
-			if err := tx.Create(&item).Error; err != nil {
+				ItemConfirmed:  reqItem.ItemConfirmed,
+			})
+		}
+		if len(newItems) > 0 {
+			if err := tx.CreateInBatches(&newItems, 100).Error; err != nil {
 				return err
 			}
-
-			var srcSizes []inventory.StockAdjustSize
-			var destSizes []inventory.StockAdjustSize
+		}
+		var newSizes []models.TransferItemSize
+		for i, reqItem := range req.Items {
+			itemID := newItems[i].ID
 			for _, s := range reqItem.Sizes {
-				size := models.TransferItemSize{
-					TransferItemID: item.ID,
+				newSizes = append(newSizes, models.TransferItemSize{
+					TransferItemID: itemID,
 					SizeOptionID:   s.SizeOptionID,
 					Qty:            s.Qty,
-				}
-				if err := tx.Create(&size).Error; err != nil {
-					return err
-				}
-				if s.Qty > 0 {
-					adjSize := inventory.StockAdjustSize{SizeOptionID: s.SizeOptionID, Qty: s.Qty}
-					srcSizes = append(srcSizes, adjSize)
-					destSizes = append(destSizes, adjSize)
-				}
+				})
 			}
-			if len(srcSizes) > 0 {
-				newSourceAdj = append(newSourceAdj, inventory.StockAdjustItem{ProductID: reqItem.ProductID, Sizes: srcSizes})
-				newDestAdj[destCust.ID] = append(newDestAdj[destCust.ID], inventory.StockAdjustItem{ProductID: reqItem.ProductID, Sizes: destSizes})
+		}
+		if len(newSizes) > 0 {
+			if err := tx.CreateInBatches(&newSizes, 200).Error; err != nil {
+				return err
 			}
 		}
 
-		// 新的調出方庫存足量檢查（在還原舊庫存後、扣新庫存前）
-		if len(newSourceAdj) > 0 {
-			if err := inventory.CheckStockSufficient(tx, sourceCustomer.ID, newSourceAdj); err != nil {
-				return err
-			}
-			if err := inventory.AdjustStockBatch(tx, sourceCustomer.ID, newSourceAdj, -1); err != nil {
-				return err
-			}
-		}
-		// 新的調入方加庫存
-		for destCustID, adjItems := range newDestAdj {
-			if err := inventory.AdjustStockBatch(tx, destCustID, adjItems, 1); err != nil {
-				return err
-			}
+		// === 7. 一次 UPSERT 套用全部庫存 delta ===
+		if err := inventory.ApplyStockDeltas(tx, deltas); err != nil {
+			return err
 		}
 
 		return nil
