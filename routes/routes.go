@@ -245,6 +245,11 @@ func RouterRegister(route *gin.Engine) {
 			middlewares.RequirePermission("product-sales-summary.view"),
 			controllers.GetProductSalesSummary)
 
+		// 統計報表作業 - 商品銷售統計
+		adminAuth.GET("/reports/product-sales-stats",
+			middlewares.RequirePermission("product-sales-stats.view"),
+			controllers.GetProductSalesStats)
+
 		// 庫存管理 - 庫存調整
 		adminAuth.GET("/modifies", middlewares.RequirePermission("modify.view"), controllers.GetModifies)
 		adminAuth.GET("/modifies/:id", middlewares.RequirePermission("modify.view"), controllers.GetModify)

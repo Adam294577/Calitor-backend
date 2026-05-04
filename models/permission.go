@@ -459,8 +459,9 @@ func SeedMasterDataPermissions(db *DBManager) {
 	statisticalMid := []Permission{
 		{Key: "product-in-out-summary", Name: "商品進出簡表", Sort: 1, ParentId: &statisticalReports.ID},
 		{Key: "product-sales-summary", Name: "商品銷售總表", Sort: 2, ParentId: &statisticalReports.ID},
-		{Key: "customer-shipment-summary", Name: "客戶出貨統計", Sort: 3, ParentId: &statisticalReports.ID},
-		{Key: "vendor-stock-summary", Name: "廠商進貨統計", Sort: 4, ParentId: &statisticalReports.ID},
+		{Key: "product-sales-stats", Name: "商品銷售統計", Sort: 3, ParentId: &statisticalReports.ID},
+		{Key: "customer-shipment-summary", Name: "客戶出貨統計", Sort: 4, ParentId: &statisticalReports.ID},
+		{Key: "vendor-stock-summary", Name: "廠商進貨統計", Sort: 5, ParentId: &statisticalReports.ID},
 	}
 	for i, p := range statisticalMid {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&statisticalMid[i])
@@ -470,8 +471,9 @@ func SeedMasterDataPermissions(db *DBManager) {
 	statisticalLeaf := []Permission{
 		{Key: "product-in-out-summary.view", Name: "檢視商品進出簡表", Sort: 1, ParentId: &statisticalMid[0].ID},
 		{Key: "product-sales-summary.view", Name: "檢視商品銷售總表", Sort: 1, ParentId: &statisticalMid[1].ID},
-		{Key: "customer-shipment-summary.view", Name: "檢視客戶出貨統計", Sort: 1, ParentId: &statisticalMid[2].ID},
-		{Key: "vendor-stock-summary.view", Name: "檢視廠商進貨統計", Sort: 1, ParentId: &statisticalMid[3].ID},
+		{Key: "product-sales-stats.view", Name: "檢視商品銷售統計", Sort: 1, ParentId: &statisticalMid[2].ID},
+		{Key: "customer-shipment-summary.view", Name: "檢視客戶出貨統計", Sort: 1, ParentId: &statisticalMid[3].ID},
+		{Key: "vendor-stock-summary.view", Name: "檢視廠商進貨統計", Sort: 1, ParentId: &statisticalMid[4].ID},
 	}
 	for _, p := range statisticalLeaf {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&p)
