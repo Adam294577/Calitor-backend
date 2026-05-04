@@ -105,12 +105,13 @@ func CreateTransfer(c *gin.Context) {
 		FillPersonID *int64 `json:"fill_person_id"`
 		Remark       string `json:"remark"`
 		Items        []struct {
-			ProductID   int64   `json:"product_id"`
-			SizeGroupID *int64  `json:"size_group_id"`
-			ItemOrder   int     `json:"item_order"`
-			UnitPrice   float64 `json:"unit_price"`
-			DestStore   string  `json:"dest_store"`
-			Sizes       []struct {
+			ProductID     int64   `json:"product_id"`
+			SizeGroupID   *int64  `json:"size_group_id"`
+			ItemOrder     int     `json:"item_order"`
+			UnitPrice     float64 `json:"unit_price"`
+			DestStore     string  `json:"dest_store"`
+			ItemConfirmed bool    `json:"item_confirmed"`
+			Sizes         []struct {
 				SizeOptionID int64 `json:"size_option_id"`
 				Qty          int   `json:"qty"`
 			} `json:"sizes"`
@@ -206,6 +207,7 @@ func CreateTransfer(c *gin.Context) {
 				TotalAmount:    totalAmount,
 				DestStore:      reqItem.DestStore,
 				DestCustomerID: destCust.ID,
+				ItemConfirmed:  reqItem.ItemConfirmed,
 			}
 			if err := tx.Create(&item).Error; err != nil {
 				return err
@@ -287,12 +289,13 @@ func UpdateTransfer(c *gin.Context) {
 		FillPersonID *int64 `json:"fill_person_id"`
 		Remark       string `json:"remark"`
 		Items        []struct {
-			ProductID   int64   `json:"product_id"`
-			SizeGroupID *int64  `json:"size_group_id"`
-			ItemOrder   int     `json:"item_order"`
-			UnitPrice   float64 `json:"unit_price"`
-			DestStore   string  `json:"dest_store"`
-			Sizes       []struct {
+			ProductID     int64   `json:"product_id"`
+			SizeGroupID   *int64  `json:"size_group_id"`
+			ItemOrder     int     `json:"item_order"`
+			UnitPrice     float64 `json:"unit_price"`
+			DestStore     string  `json:"dest_store"`
+			ItemConfirmed bool    `json:"item_confirmed"`
+			Sizes         []struct {
 				SizeOptionID int64 `json:"size_option_id"`
 				Qty          int   `json:"qty"`
 			} `json:"sizes"`
@@ -418,6 +421,7 @@ func UpdateTransfer(c *gin.Context) {
 				TotalAmount:    totalAmount,
 				DestStore:      reqItem.DestStore,
 				DestCustomerID: destCust.ID,
+				ItemConfirmed:  reqItem.ItemConfirmed,
 			}
 			if err := tx.Create(&item).Error; err != nil {
 				return err
