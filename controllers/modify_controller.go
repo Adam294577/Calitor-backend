@@ -54,13 +54,6 @@ func GetModify(c *gin.Context) {
 	db := models.PostgresNew()
 	defer db.Close()
 
-	// 先取 customer_id 以常數帶入 SizeStocks Preload,避免 Preload 內嵌 subquery
-	var existingCustomerID int64
-	if err := db.GetRead().Model(&models.Modify{}).Where("id = ?", id).Pluck("customer_id", &existingCustomerID).Error; err != nil {
-		resp.Fail(http.StatusNotFound, "調整單不存在").Send()
-		return
-	}
-
 	var item models.Modify
 	err = db.GetRead().
 		Preload("Customer").
@@ -78,7 +71,6 @@ func GetModify(c *gin.Context) {
 		Preload("Items.Product.Size3Group.Options", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order ASC")
 		}).
-		Preload("Items.Product.SizeStocks", "customer_id = ?", existingCustomerID).
 		Preload("Items.SizeGroup.Options", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order ASC")
 		}).
