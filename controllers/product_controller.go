@@ -187,6 +187,21 @@ func CreateProduct(c *gin.Context) {
 			}
 		}
 		// 建立 ProductVendors
+		// 業務規則：每個 product 只能 1 個 is_primary=true。
+		// 若 req 多個 is_primary=true，保留第一個；若都沒設且 list 非空，第一個強制設為 primary。
+		primarySet := false
+		for i := range req.ProductVendors {
+			if req.ProductVendors[i].IsPrimary {
+				if primarySet {
+					req.ProductVendors[i].IsPrimary = false
+				} else {
+					primarySet = true
+				}
+			}
+		}
+		if !primarySet && len(req.ProductVendors) > 0 {
+			req.ProductVendors[0].IsPrimary = true
+		}
 		for _, pv := range req.ProductVendors {
 			item := models.ProductVendor{
 				ProductID:     product.ID,
@@ -322,8 +337,10 @@ func UpdateProduct(c *gin.Context) {
 			}
 		}
 		// 重建 ProductVendors
+		// 業務規則：每個 product 只能 1 個 is_primary=true（同 CreateProduct）
 		if hasProductVendors {
 			tx.Where("product_id = ?", id).Delete(&models.ProductVendor{})
+			pvs := make([]models.ProductVendor, 0, len(productVendors))
 			for _, raw := range productVendors {
 				m, ok := raw.(map[string]interface{})
 				if !ok {
@@ -348,6 +365,23 @@ func UpdateProduct(c *gin.Context) {
 				if v, ok := m["is_primary"].(bool); ok {
 					pv.IsPrimary = v
 				}
+				pvs = append(pvs, pv)
+			}
+			// normalize：保留第一個 is_primary=true，其餘 false；若都沒設，第一個強制設為 primary
+			primarySet := false
+			for i := range pvs {
+				if pvs[i].IsPrimary {
+					if primarySet {
+						pvs[i].IsPrimary = false
+					} else {
+						primarySet = true
+					}
+				}
+			}
+			if !primarySet && len(pvs) > 0 {
+				pvs[0].IsPrimary = true
+			}
+			for _, pv := range pvs {
 				if err := tx.Create(&pv).Error; err != nil {
 					return err
 				}
