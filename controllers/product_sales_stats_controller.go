@@ -70,7 +70,11 @@ func GetProductSalesStats(c *gin.Context) {
 	if categoryLevel < 1 || categoryLevel > 5 {
 		categoryLevel = 1
 	}
-	categoryID, _ := strconv.ParseInt(c.Query("category_id"), 10, 64)
+	// category_ids 多選 (comma-separated);保留舊 category_id 單值參數作向後相容
+	categoryIDs := splitNonEmpty(c.Query("category_ids"))
+	if singleID := strings.TrimSpace(c.Query("category_id")); singleID != "" {
+		categoryIDs = append(categoryIDs, singleID)
+	}
 
 	branchCodeFrom := strings.TrimSpace(c.Query("branch_code_from"))
 	branchCodeTo := strings.TrimSpace(c.Query("branch_code_to"))
@@ -109,28 +113,54 @@ func GetProductSalesStats(c *gin.Context) {
 	salesParts := []string{}
 	salesArgs := []interface{}{}
 
+	// 實售金額一律「含稅」(per-item total_amount 是未稅,要乘 1 + tax_rate/100)
+	// retail_sells 沒有 tax_mode 欄位,視為應稅(固定乘);shipments 看 tax_mode 決定。
+	// 「分店」直接用銷貨/出貨單的 sell_store / ship_store 字串(對齊 product_in_out_summary controller),
+	// 顯示分店名稱另外用 customer.code = store_code 反查 (因為 customer.code 是 unique,branch_code 不是)。
 	if txType == "all" || txType == "sell" {
-		salesParts = append(salesParts, `
-            SELECT rsi.product_id, rsi.total_qty AS qty, rsi.total_amount AS actual_amt,
-                   rs.customer_id AS branch_id
+		sellSQL := `
+            SELECT rsi.product_id,
+                   rsi.total_qty AS qty,
+                   rsi.total_amount * (1 + COALESCE(rs.tax_rate, 0) / 100.0) AS actual_amt,
+                   COALESCE(rs.sell_store, '') AS store_code
             FROM retail_sell_items rsi
             JOIN retail_sells rs ON rs.id = rsi.retail_sell_id
             WHERE rs.deleted_at IS NULL
-              AND rs.sell_date BETWEEN ? AND ?
-        `)
-		salesArgs = append(salesArgs, dateFrom, dateTo)
+        `
+		sellArgs := []interface{}{}
+		if dateFrom != "" {
+			sellSQL += " AND rs.sell_date >= ?"
+			sellArgs = append(sellArgs, dateFrom)
+		}
+		if dateTo != "" {
+			sellSQL += " AND rs.sell_date <= ?"
+			sellArgs = append(sellArgs, dateTo)
+		}
+		salesParts = append(salesParts, sellSQL)
+		salesArgs = append(salesArgs, sellArgs...)
 	}
 
 	if txType == "all" || txType == "shipment" {
 		shipmentSQL := `
-            SELECT si.product_id, si.total_qty AS qty, si.total_amount AS actual_amt,
-                   sh.customer_id AS branch_id
+            SELECT si.product_id,
+                   si.total_qty AS qty,
+                   CASE WHEN sh.tax_mode = 1 THEN si.total_amount
+                        ELSE si.total_amount * (1 + COALESCE(sh.tax_rate, 0) / 100.0)
+                   END AS actual_amt,
+                   COALESCE(sh.ship_store, '') AS store_code
             FROM shipment_items si
             JOIN shipments sh ON sh.id = si.shipment_id
             WHERE sh.deleted_at IS NULL
-              AND sh.shipment_date BETWEEN ? AND ?
         `
-		shipmentArgs := []interface{}{dateFrom, dateTo}
+		shipmentArgs := []interface{}{}
+		if dateFrom != "" {
+			shipmentSQL += " AND sh.shipment_date >= ?"
+			shipmentArgs = append(shipmentArgs, dateFrom)
+		}
+		if dateTo != "" {
+			shipmentSQL += " AND sh.shipment_date <= ?"
+			shipmentArgs = append(shipmentArgs, dateTo)
+		}
 		switch tradeType {
 		case "purchase":
 			shipmentSQL += " AND sh.deal_mode = 1"
@@ -185,10 +215,11 @@ func GetProductSalesStats(c *gin.Context) {
 		groupExpr = "pb.name, pc.name"
 		orderExpr = "pb.name, pc.name"
 	case "branch":
-		key1Expr = "COALESCE(rc.branch_code, '')"
+		// 分店識別 = 銷貨/出貨單的 store_code 字串;名稱用 customer.code 反查
+		key1Expr = "COALESCE(sa.store_code, '')"
 		key2Expr = "COALESCE(NULLIF(rc.short_name, ''), rc.name, '')"
-		groupExpr = "rc.branch_code, rc.name, rc.short_name"
-		orderExpr = "rc.branch_code"
+		groupExpr = "sa.store_code, rc.name, rc.short_name"
+		orderExpr = "sa.store_code"
 	}
 
 	// 商品/銷售篩選 WHERE
@@ -215,12 +246,18 @@ func GetProductSalesStats(c *gin.Context) {
 		whereParts = append(whereParts, "UPPER(v.code) <= UPPER(?)")
 		whereArgs = append(whereArgs, vendorCodeTo)
 	}
+	// 分店篩選:直接用銷貨/出貨單的 store_code (sell_store/ship_store) 字串比對。
+	// 「依分店」group_by 與「分店區間」都加上 store_code 非空條件,排除沒有指定分店的紀錄。
+	needsBranchFilter := branchCodeFrom != "" || branchCodeTo != "" || groupBy == "branch"
+	if needsBranchFilter {
+		whereParts = append(whereParts, "sa.store_code <> ''")
+	}
 	if branchCodeFrom != "" {
-		whereParts = append(whereParts, "UPPER(rc.branch_code) >= UPPER(?)")
+		whereParts = append(whereParts, "UPPER(sa.store_code) >= UPPER(?)")
 		whereArgs = append(whereArgs, branchCodeFrom)
 	}
 	if branchCodeTo != "" {
-		whereParts = append(whereParts, "UPPER(rc.branch_code) <= UPPER(?)")
+		whereParts = append(whereParts, "UPPER(sa.store_code) <= UPPER(?)")
 		whereArgs = append(whereArgs, branchCodeTo)
 	}
 	if createdFrom != "" {
@@ -231,9 +268,14 @@ func GetProductSalesStats(c *gin.Context) {
 		whereParts = append(whereParts, "TO_CHAR(p.created_on, 'YYYYMMDD') <= ?")
 		whereArgs = append(whereArgs, createdTo)
 	}
-	if categoryID > 0 {
-		whereParts = append(whereParts, "pcm.category_id = ?")
-		whereArgs = append(whereArgs, categoryID)
+	// 類別篩選只服務於「依類別」「依品牌類別」兩個分組;其他維度即使前端送了也忽略(防呆)
+	if len(categoryIDs) > 0 && (groupBy == "category" || groupBy == "brand_category") {
+		ph := strings.Repeat("?,", len(categoryIDs))
+		ph = ph[:len(ph)-1]
+		whereParts = append(whereParts, fmt.Sprintf("pcm.category%d_id IN (%s)", categoryLevel, ph))
+		for _, id := range categoryIDs {
+			whereArgs = append(whereArgs, id)
+		}
 	}
 
 	whereClause := ""
@@ -259,12 +301,15 @@ func GetProductSalesStats(c *gin.Context) {
         LEFT JOIN vendors v ON v.id = pv.vendor_id
         LEFT JOIN product_brands pb ON pb.id = p.product_brand_id
         LEFT JOIN product_category_map pcm ON pcm.product_id = p.id AND pcm.category_type = ?
-        LEFT JOIN product_category_%d pc ON pc.id = pcm.category_id
-        LEFT JOIN retail_customers rc ON rc.id = sa.branch_id
+        LEFT JOIN product_category_%d pc ON pc.id = pcm.category%d_id
+        LEFT JOIN LATERAL (
+            SELECT short_name, name FROM retail_customers
+            WHERE code = sa.store_code AND deleted_at IS NULL LIMIT 1
+        ) rc ON TRUE
         %s
         GROUP BY %s
         ORDER BY %s
-    `, salesCTE, costsCTE, key1Expr, key2Expr, categoryLevel, whereClause, groupExpr, orderExpr)
+    `, salesCTE, costsCTE, key1Expr, key2Expr, categoryLevel, categoryLevel, whereClause, groupExpr, orderExpr)
 
 	fullArgs := []interface{}{}
 	fullArgs = append(fullArgs, salesArgs...)
