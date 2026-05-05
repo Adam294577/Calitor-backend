@@ -11,10 +11,43 @@ import (
 	response "project/services/responses"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+// CheckCustomerOverdueShipments 檢查客戶是否有 N 個月前未繳清出貨單。
+// shipmentDate: YYYYMMDD;customerMonth: 客戶設定的「月份」(往前推幾個月)。
+// 回傳 (cutoffMonth, count, err);未設 Month 或 Month=0 視為不檢查,回 ("", 0, nil)。
+func CheckCustomerOverdueShipments(db *gorm.DB, customerID int64, shipmentDate string, customerMonth string) (string, int64, error) {
+	if customerMonth == "" || customerMonth == "0" {
+		return "", 0, nil
+	}
+	months, _ := strconv.Atoi(customerMonth)
+	if months <= 0 || len(shipmentDate) < 6 {
+		return "", 0, nil
+	}
+	y, _ := strconv.Atoi(shipmentDate[:4])
+	m, _ := strconv.Atoi(shipmentDate[4:6])
+	m -= months
+	for m <= 0 {
+		m += 12
+		y--
+	}
+	cutoffMonth := fmt.Sprintf("%04d%02d", y, m)
+	var unclearedCount int64
+	if err := db.Raw(`
+		SELECT COUNT(*) FROM shipments s
+		`+receivable.GatherDetailsAggJoin+`
+		WHERE s.customer_id = ? AND s.deleted_at IS NULL AND s.shipment_mode = 3
+		AND s.close_month <= ?
+		AND (`+receivable.OutstandingRoundedExpr+`) > 0
+	`, customerID, cutoffMonth).Scan(&unclearedCount).Error; err != nil {
+		return cutoffMonth, 0, err
+	}
+	return cutoffMonth, unclearedCount, nil
+}
 
 // GetShipments 客戶出貨單列表
 func GetShipments(c *gin.Context) {
@@ -202,55 +235,34 @@ func CreateShipment(c *gin.Context) {
 		return
 	}
 
-	// 出貨模式檢查信用額度和月份限制
-	if req.ShipmentMode != 4 {
-		// 信用額度檢查：CreditLimit > 0 時，未沖銷餘額不可超過
-		if customer.CreditLimit > 0 {
-			type balRow struct {
-				TotalDeal   float64
-				TotalCharge float64
-			}
-			var bal balRow
-			db.GetRead().Model(&models.Shipment{}).
-				Select("COALESCE(SUM(deal_amount), 0) as total_deal, COALESCE(SUM(charge_amount), 0) as total_charge").
-				Where("customer_id = ? AND deleted_at IS NULL", req.CustomerID).
-				Scan(&bal)
-			outstanding := bal.TotalDeal - bal.TotalCharge
-			if outstanding >= customer.CreditLimit {
-				resp.Fail(http.StatusBadRequest, fmt.Sprintf("已超過信用額度（額度: %.0f，未沖銷: %.0f）", customer.CreditLimit, outstanding)).Send()
-				return
-			}
+	// 信用額度檢查：CreditLimit > 0 時，未沖銷餘額不可超過(僅出貨模式檢查,退貨不檢查)
+	if req.ShipmentMode != 4 && customer.CreditLimit > 0 {
+		type balRow struct {
+			TotalDeal   float64
+			TotalCharge float64
 		}
+		var bal balRow
+		db.GetRead().Model(&models.Shipment{}).
+			Select("COALESCE(SUM(deal_amount), 0) as total_deal, COALESCE(SUM(charge_amount), 0) as total_charge").
+			Where("customer_id = ? AND deleted_at IS NULL", req.CustomerID).
+			Scan(&bal)
+		outstanding := bal.TotalDeal - bal.TotalCharge
+		if outstanding >= customer.CreditLimit {
+			resp.Fail(http.StatusBadRequest, fmt.Sprintf("已超過信用額度（額度: %.0f，未沖銷: %.0f）", customer.CreditLimit, outstanding)).Send()
+			return
+		}
+	}
 
-		// 月份限制檢查：Month 有值時，往前推 N 個月的出貨不得有未繳清
-		if customer.Month != "" && customer.Month != "0" {
-			months, _ := strconv.Atoi(customer.Month)
-			if months > 0 {
-				// 計算 N 個月前的 YYYYMM
-				now := req.ShipmentDate
-				if len(now) >= 6 {
-					y, _ := strconv.Atoi(now[:4])
-					m, _ := strconv.Atoi(now[4:6])
-					m -= months
-					for m <= 0 {
-						m += 12
-						y--
-					}
-					cutoffMonth := fmt.Sprintf("%04d%02d", y, m)
-
-					var unclearedCount int64
-					db.GetRead().Raw(`
-						SELECT COUNT(*) FROM shipments s
-						`+receivable.GatherDetailsAggJoin+`
-						WHERE s.customer_id = ? AND s.deleted_at IS NULL AND s.shipment_mode = 3 AND s.close_month <= ?
-						AND (`+receivable.OutstandingRoundedExpr+`) > 0
-					`, req.CustomerID, cutoffMonth).Scan(&unclearedCount)
-					if unclearedCount > 0 {
-						resp.Fail(http.StatusBadRequest, fmt.Sprintf("%s 月以前尚有 %d 筆未繳清出貨單，請先完成沖帳", cutoffMonth, unclearedCount)).Send()
-						return
-					}
-				}
-			}
+	// 月份未沖帳檢查：出貨/退貨皆檢查(已對齊條碼批次)
+	{
+		cutoffMonth, unclearedCount, cerr := CheckCustomerOverdueShipments(db.GetRead(), req.CustomerID, req.ShipmentDate, customer.Month)
+		if cerr != nil {
+			resp.Fail(http.StatusInternalServerError, fmt.Sprintf("檢查未繳期失敗: %v", cerr)).Send()
+			return
+		}
+		if unclearedCount > 0 {
+			resp.Fail(http.StatusBadRequest, fmt.Sprintf("%s 月以前尚有 %d 筆未繳清出貨單，請先完成沖帳", cutoffMonth, unclearedCount)).Send()
+			return
 		}
 	}
 
@@ -870,8 +882,9 @@ func BarcodeParse(c *gin.Context) {
 	defer db.Close()
 
 	var req struct {
-		CustomerID int64 `json:"customer_id" binding:"required"`
-		Entries    []struct {
+		CustomerID   int64 `json:"customer_id" binding:"required"`
+		ShipmentDate string `json:"shipment_date"` // YYYYMMDD;空字串→今天,用於未繳期 cutoffMonth 計算
+		Entries      []struct {
 			Barcode string `json:"barcode"`
 			Qty     int    `json:"qty"`
 		} `json:"entries" binding:"required"`
@@ -880,6 +893,25 @@ func BarcodeParse(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
 		return
+	}
+
+	// 0. 計算客戶未繳期狀態(parse 階段就回給前端,讓使用者看到 TAB 警示)
+	type overdueInfo struct {
+		CutoffMonth string `json:"cutoff_month"`
+		Count       int64  `json:"count"`
+	}
+	var overdue *overdueInfo
+	{
+		shipDate := req.ShipmentDate
+		if shipDate == "" {
+			shipDate = time.Now().Format("20060102")
+		}
+		var cust models.RetailCustomer
+		if err := db.GetRead().Where("id = ?", req.CustomerID).First(&cust).Error; err == nil {
+			if cm, cnt, _ := CheckCustomerOverdueShipments(db.GetRead(), req.CustomerID, shipDate, cust.Month); cnt > 0 {
+				overdue = &overdueInfo{CutoffMonth: cm, Count: cnt}
+			}
+		}
 	}
 
 	// 1. 載入 SizeGroups(排序好的) + 逐筆解析條碼
@@ -1082,8 +1114,9 @@ func BarcodeParse(c *gin.Context) {
 			resultItems = append(resultItems, *mergeMap[k])
 		}
 		resp.Success("成功").SetData(map[string]interface{}{
-			"items":  resultItems,
-			"errors": errors,
+			"items":   resultItems,
+			"errors":  errors,
+			"overdue": overdue,
 		}).Send()
 		return
 	}
@@ -1282,7 +1315,8 @@ func BarcodeParse(c *gin.Context) {
 	}
 
 	resp.Success("成功").SetData(map[string]interface{}{
-		"items":  resultItems,
-		"errors": errors,
+		"items":   resultItems,
+		"errors":  errors,
+		"overdue": overdue,
 	}).Send()
 }

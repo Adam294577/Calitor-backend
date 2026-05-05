@@ -7,7 +7,6 @@ import (
 	"project/models"
 	"project/services/inventory"
 	"project/services/log"
-	"project/services/receivable"
 	response "project/services/responses"
 	"strconv"
 
@@ -78,6 +77,15 @@ type BatchShipmentCreated struct {
 	CustomerName string `json:"customer_name"`
 }
 
+// BatchShipmentSkipped 因未繳期等原因被跳過的客戶資訊。
+type BatchShipmentSkipped struct {
+	CustomerID   int64  `json:"customer_id"`
+	CustomerName string `json:"customer_name"`
+	CutoffMonth  string `json:"cutoff_month"`
+	Count        int64  `json:"count"`
+	Reason       string `json:"reason"` // overdue
+}
+
 // CreateShipmentBatch 批次建立多張出貨單(單一交易,失敗整體 rollback)
 // 主要給條碼出貨使用:一次 TXT 解析後,多客戶各建一張
 func CreateShipmentBatch(c *gin.Context) {
@@ -142,9 +150,11 @@ func CreateShipmentBatch(c *gin.Context) {
 			recorderID, len(payload.Shipments), totalItems, totalSizes, maxItemsPerCust, sh.ShipmentMode)
 	}
 
-	// 月份未沖帳檢查(對齊 CreateShipment line 226-254 邏輯,訊息與鍵盤輸入一致)
-	// 退貨(mode=4)不檢查;任一客戶不通過就整批拒絕,不開 transaction
-	if sh.ShipmentMode != 4 {
+	// 月份未沖帳檢查:逐客戶過濾,未繳期客戶從 payload 移除並記入 skipped(出貨/退貨皆過濾)
+	// 前端正常路徑已過濾,這裡作為 defense-in-depth + race condition 補救
+	var skipped []BatchShipmentSkipped
+	{
+		filtered := make([]BatchShipmentEntry, 0, len(payload.Shipments))
 		for idx := range payload.Shipments {
 			entry := payload.Shipments[idx]
 			var customer models.RetailCustomer
@@ -152,34 +162,32 @@ func CreateShipmentBatch(c *gin.Context) {
 				resp.Fail(http.StatusBadRequest, fmt.Sprintf("第 %d 張:客戶 ID %d 不存在", idx+1, entry.CustomerID)).Send()
 				return
 			}
-			if customer.Month == "" || customer.Month == "0" {
-				continue
-			}
-			months, _ := strconv.Atoi(customer.Month)
-			if months <= 0 || len(sh.ShipmentDate) < 6 {
-				continue
-			}
-			y, _ := strconv.Atoi(sh.ShipmentDate[:4])
-			m, _ := strconv.Atoi(sh.ShipmentDate[4:6])
-			m -= months
-			for m <= 0 {
-				m += 12
-				y--
-			}
-			cutoffMonth := fmt.Sprintf("%04d%02d", y, m)
-
-			var unclearedCount int64
-			db.GetRead().Raw(`
-				SELECT COUNT(*) FROM shipments s
-				`+receivable.GatherDetailsAggJoin+`
-				WHERE s.customer_id = ? AND s.deleted_at IS NULL AND s.shipment_mode = 3 AND s.close_month <= ?
-				AND (`+receivable.OutstandingRoundedExpr+`) > 0
-			`, entry.CustomerID, cutoffMonth).Scan(&unclearedCount)
-			if unclearedCount > 0 {
-				resp.Fail(http.StatusBadRequest, fmt.Sprintf("客戶 %s:%s 月以前尚有 %d 筆未繳清出貨單,請先完成沖帳", customer.Name, cutoffMonth, unclearedCount)).Send()
+			cm, cnt, cerr := CheckCustomerOverdueShipments(db.GetRead(), entry.CustomerID, sh.ShipmentDate, customer.Month)
+			if cerr != nil {
+				resp.Fail(http.StatusInternalServerError, fmt.Sprintf("檢查未繳期失敗: %v", cerr)).Send()
 				return
 			}
+			if cnt > 0 {
+				skipped = append(skipped, BatchShipmentSkipped{
+					CustomerID:   entry.CustomerID,
+					CustomerName: customer.Name,
+					CutoffMonth:  cm,
+					Count:        cnt,
+					Reason:       "overdue",
+				})
+				continue
+			}
+			filtered = append(filtered, entry)
 		}
+		payload.Shipments = filtered
+	}
+
+	if len(payload.Shipments) == 0 {
+		resp.Success("無可建立的出貨單(全部客戶未繳期已跳過)").SetData(map[string]interface{}{
+			"shipments": []BatchShipmentCreated{},
+			"skipped":   skipped,
+		}).Send()
+		return
 	}
 
 	var created []BatchShipmentCreated
@@ -404,5 +412,8 @@ func CreateShipmentBatch(c *gin.Context) {
 		resp.Fail(http.StatusBadRequest, err.Error()).Send()
 		return
 	}
-	resp.Success("成功").SetData(map[string]interface{}{"shipments": created}).Send()
+	resp.Success("成功").SetData(map[string]interface{}{
+		"shipments": created,
+		"skipped":   skipped,
+	}).Send()
 }

@@ -64,9 +64,12 @@ func GetInventory(c *gin.Context) {
 	where := "WHERE p.deleted_at IS NULL AND p.is_visible = true"
 	args := []interface{}{}
 
-	if v := c.Query("customer_id"); v != "" {
-		where += " AND pss.customer_id = ?"
-		args = append(args, v)
+	if v := c.Query("customer_ids"); v != "" {
+		ids := strings.Split(v, ",")
+		where += " AND pss.customer_id IN (" + placeholders(len(ids)) + ")"
+		for _, id := range ids {
+			args = append(args, strings.TrimSpace(id))
+		}
 	}
 	if frag, fargs := BuildModelCodeRangeWhere("p.model_code", c.Query("model_code_from"), c.Query("model_code_to")); frag != "" {
 		where += " AND " + frag

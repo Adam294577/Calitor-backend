@@ -248,13 +248,14 @@ func CreateAccount(c *gin.Context) {
 		if err := tx.Create(&admin).Error; err != nil {
 			return err
 		}
-		for _, roleId := range req.RoleIds {
-			ar := models.AdminRole{AdminId: admin.ID, RoleId: roleId}
-			if err := tx.Create(&ar).Error; err != nil {
-				return err
-			}
+		if len(req.RoleIds) == 0 {
+			return nil
 		}
-		return nil
+		ars := make([]models.AdminRole, 0, len(req.RoleIds))
+		for _, roleId := range req.RoleIds {
+			ars = append(ars, models.AdminRole{AdminId: admin.ID, RoleId: roleId})
+		}
+		return tx.CreateInBatches(ars, 500).Error
 	})
 	if err != nil {
 		resp.Panic(err).Send()
@@ -374,9 +375,12 @@ func UpdateAccount(c *gin.Context) {
 			if err := tx.Where("admin_id = ?", id).Delete(&models.AdminRole{}).Error; err != nil {
 				return err
 			}
-			for _, roleId := range req.RoleIds {
-				ar := models.AdminRole{AdminId: id, RoleId: roleId}
-				if err := tx.Create(&ar).Error; err != nil {
+			if len(req.RoleIds) > 0 {
+				ars := make([]models.AdminRole, 0, len(req.RoleIds))
+				for _, roleId := range req.RoleIds {
+					ars = append(ars, models.AdminRole{AdminId: id, RoleId: roleId})
+				}
+				if err := tx.CreateInBatches(ars, 500).Error; err != nil {
 					return err
 				}
 			}
@@ -911,18 +915,19 @@ func UpdateRolePermissions(c *gin.Context) {
 		return
 	}
 
-	// Transaction: 先刪後建
+	// Transaction: 先刪後批次寫入 (原本 N 次獨立 INSERT 在權限多時 RTT 累積到秒級)
 	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("role_id = ?", id).Delete(&models.RolePermission{}).Error; err != nil {
 			return err
 		}
-		for _, pid := range req.PermissionIds {
-			rp := models.RolePermission{RoleId: id, PermissionId: pid}
-			if err := tx.Create(&rp).Error; err != nil {
-				return err
-			}
+		if len(req.PermissionIds) == 0 {
+			return nil
 		}
-		return nil
+		rps := make([]models.RolePermission, 0, len(req.PermissionIds))
+		for _, pid := range req.PermissionIds {
+			rps = append(rps, models.RolePermission{RoleId: id, PermissionId: pid})
+		}
+		return tx.CreateInBatches(rps, 500).Error
 	})
 
 	if err != nil {
