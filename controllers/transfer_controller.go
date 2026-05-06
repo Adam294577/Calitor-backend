@@ -78,6 +78,10 @@ func GetTransfer(c *gin.Context) {
 		Preload("Items.Product.Size3Group.Options", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order ASC")
 		}).
+		Preload("Items.Product.CategoryMaps", func(db *gorm.DB) *gorm.DB {
+			return db.Where("category_type = 5")
+		}).
+		Preload("Items.Product.CategoryMaps.Category5").
 		Preload("Items.SizeGroup.Options", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order ASC")
 		}).
