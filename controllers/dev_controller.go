@@ -95,7 +95,7 @@ func FixShipmentNo(c *gin.Context) {
 			var maxNo string
 			db.GetRead().Unscoped().Model(&models.Shipment{}).
 				Where("shipment_no LIKE ? AND id != ?", noPrefix+"%", s.ID).
-				Select("MAX(shipment_no)").
+				Select("COALESCE(MAX(shipment_no), '')").
 				Scan(&maxNo)
 			seq := 1
 			if maxNo != "" && len(maxNo) > len(noPrefix) {
