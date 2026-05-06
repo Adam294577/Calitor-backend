@@ -220,7 +220,7 @@ func CreateShipmentBatch(c *gin.Context) {
 				var maxNo string
 				if err := tx.Unscoped().Model(&models.Shipment{}).
 					Where("shipment_no LIKE ?", noPrefix+"%").
-					Select("MAX(shipment_no)").
+					Select("COALESCE(MAX(shipment_no), '')").
 					Scan(&maxNo).Error; err != nil {
 					return fmt.Errorf("第 %d 張:查詢出貨單流水號失敗 %w", idx+1, err)
 				}

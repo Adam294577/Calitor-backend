@@ -284,7 +284,7 @@ func CreateShipment(c *gin.Context) {
 	var maxNo string
 	db.GetRead().Unscoped().Model(&models.Shipment{}).
 		Where("shipment_no LIKE ?", noPrefix+"%").
-		Select("MAX(shipment_no)").
+		Select("COALESCE(MAX(shipment_no), '')").
 		Scan(&maxNo)
 
 	seq := 1
