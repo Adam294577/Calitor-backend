@@ -67,14 +67,38 @@ func setListCacheRaw(c *gin.Context, data interface{}) {
 	rc.SetJSON(listCacheKey(c), data, listCacheTTL)
 }
 
+// optionsBootstrapPrefixes 會被 bootstrap 端點吃進來的所有主檔 prefix
+// 任一個被 invalidate 時,bootstrap 也跟著失效(否則前端拿到舊下拉)
+var optionsBootstrapPrefixes = map[string]bool{
+	"customers":          true,
+	"vendors":            true,
+	"accounts":           true,
+	"product-brands":     true,
+	"product-categories": true,
+	"cost-formulas":      true,
+	"currencies":         true,
+	"brands":             true,
+}
+
 // invalidateListCache 清除指定路徑前綴的所有快取
+// 任一 prefix 屬於 optionsBootstrapPrefixes 時,順便清 options/bootstrap
 func invalidateListCache(pathPrefixes ...string) {
 	rc := redis.Global()
 	if !rc.IsAvailable() {
 		return
 	}
+	cascadeBootstrap := false
 	for _, prefix := range pathPrefixes {
 		keys, err := rc.Keys(fmt.Sprintf("list:/api/admin/%s*", prefix))
+		if err == nil && len(keys) > 0 {
+			rc.Delete(keys...)
+		}
+		if optionsBootstrapPrefixes[prefix] {
+			cascadeBootstrap = true
+		}
+	}
+	if cascadeBootstrap {
+		keys, err := rc.Keys("list:/api/admin/options/bootstrap*")
 		if err == nil && len(keys) > 0 {
 			rc.Delete(keys...)
 		}
