@@ -9,12 +9,16 @@ import (
 
 // GetCostFormulas 取得所有成本轉換公式
 func GetCostFormulas(c *gin.Context) {
+	if tryListCache(c) {
+		return
+	}
 	resp := response.New(c)
 	db := models.PostgresNew()
 	defer db.Close()
 
 	var items []models.CostFormula
 	db.GetRead().Order("id ASC").Find(&items)
+	setListCache(c, items, 0)
 	resp.Success("成功").SetData(items).Send()
 }
 
@@ -56,5 +60,6 @@ func SeedCostFormulas(c *gin.Context) {
 			return
 		}
 	}
+	invalidateListCache("cost-formulas")
 	resp.Success("seed 完成").Send()
 }

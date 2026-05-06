@@ -48,6 +48,10 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.GET("/menu", controllers.GetPermissionTree)
 		adminAuth.PUT("/password", controllers.ChangePassword)
 
+		// 下拉選項聚合端點 — 一次回所有靜態下拉資料(客戶/廠商/帳號/品牌/類別/公式/幣別)
+		// 純下拉,登入即可;權限判斷由前端 UI 處理
+		adminAuth.GET("/options/bootstrap", controllers.GetOptionsBootstrap)
+
 		// 帳號管理
 		adminAuth.GET("/accounts", middlewares.RequirePermission("accounts.view"), controllers.GetAccounts)
 		adminAuth.POST("/accounts", middlewares.RequirePermission("accounts.create"), controllers.CreateAccount)
