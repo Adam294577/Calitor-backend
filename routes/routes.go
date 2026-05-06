@@ -274,10 +274,6 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.PUT("/retail-sells/:id", middlewares.RequirePermission("retail-sells.edit"), controllers.UpdateRetailSell)
 		adminAuth.DELETE("/retail-sells/:id", middlewares.RequirePermission("retail-sells.delete"), controllers.DeleteRetailSell)
 
-		// 成本轉換公式
-		adminAuth.GET("/cost-formulas", controllers.GetCostFormulas)
-		adminAuth.POST("/cost-formulas/seed", controllers.SeedCostFormulas)
-
 		// 帳款管理 - 應收帳款查詢
 		adminAuth.GET("/receivables", middlewares.RequirePermission("receivable-query.view"), controllers.GetReceivables)
 		adminAuth.GET("/receivables/customers", middlewares.RequirePermission("receivable-query.view"), controllers.GetReceivableCustomers)

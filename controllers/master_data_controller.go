@@ -646,6 +646,7 @@ func CreateCurrency(c *gin.Context) {
 		Name         string  `json:"name" binding:"required"`
 		Symbol       string  `json:"symbol"`
 		ExchangeRate float64 `json:"exchange_rate"`
+		Extra        float64 `json:"extra"`
 		IsActive     *bool   `json:"is_active"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -663,7 +664,7 @@ func CreateCurrency(c *gin.Context) {
 		return
 	}
 
-	item := models.Currency{Code: req.Code, Name: req.Name, Symbol: req.Symbol, ExchangeRate: req.ExchangeRate, IsActive: true}
+	item := models.Currency{Code: req.Code, Name: req.Name, Symbol: req.Symbol, ExchangeRate: req.ExchangeRate, Extra: req.Extra, IsActive: true}
 	if req.IsActive != nil {
 		item.IsActive = *req.IsActive
 	}
@@ -688,6 +689,7 @@ func UpdateCurrency(c *gin.Context) {
 		Name         string   `json:"name"`
 		Symbol       string   `json:"symbol"`
 		ExchangeRate *float64 `json:"exchange_rate"`
+		Extra        *float64 `json:"extra"`
 		IsActive     *bool    `json:"is_active"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -728,6 +730,9 @@ func UpdateCurrency(c *gin.Context) {
 	}
 	if req.ExchangeRate != nil {
 		updates["exchange_rate"] = *req.ExchangeRate
+	}
+	if req.Extra != nil {
+		updates["extra"] = *req.Extra
 	}
 	if req.IsActive != nil {
 		updates["is_active"] = *req.IsActive

@@ -157,11 +157,12 @@ func CreateShipmentBatch(c *gin.Context) {
 		filtered := make([]BatchShipmentEntry, 0, len(payload.Shipments))
 		for idx := range payload.Shipments {
 			entry := payload.Shipments[idx]
-			var customer models.RetailCustomer
-			if err := db.GetRead().Where("id = ?", entry.CustomerID).First(&customer).Error; err != nil {
-				resp.Fail(http.StatusBadRequest, fmt.Sprintf("第 %d 張:客戶 ID %d 不存在", idx+1, entry.CustomerID)).Send()
+			customerPtr, verr := EnsureCustomerVisible(db.GetRead(), entry.CustomerID)
+			if verr != nil {
+				resp.Fail(http.StatusBadRequest, fmt.Sprintf("第 %d 張:%s (ID %d)", idx+1, ErrMsgCustomerNotVisible, entry.CustomerID)).Send()
 				return
 			}
+			customer := *customerPtr
 			cm, cnt, cerr := CheckCustomerOverdueShipments(db.GetRead(), entry.CustomerID, sh.ShipmentDate, customer.Month)
 			if cerr != nil {
 				resp.Fail(http.StatusInternalServerError, fmt.Sprintf("檢查未繳期失敗: %v", cerr)).Send()
@@ -199,10 +200,11 @@ func CreateShipmentBatch(c *gin.Context) {
 		for idx := range payload.Shipments {
 			entry := payload.Shipments[idx]
 
-			var customer models.RetailCustomer
-			if err := tx.Where("id = ?", entry.CustomerID).First(&customer).Error; err != nil {
-				return fmt.Errorf("第 %d 張:客戶 ID %d 不存在", idx+1, entry.CustomerID)
+			customerPtr, verr := EnsureCustomerVisible(tx, entry.CustomerID)
+			if verr != nil {
+				return fmt.Errorf("第 %d 張:%s (ID %d)", idx+1, ErrMsgCustomerNotVisible, entry.CustomerID)
 			}
+			customer := *customerPtr
 
 			yyyymm := ""
 			if len(sh.ShipmentDate) >= 6 {

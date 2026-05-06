@@ -82,8 +82,8 @@ func CreateBatch(tx *gorm.DB, payload CreateBatchPayload, recorderID int64) ([]C
 			return &c, nil
 		}
 		var c models.RetailCustomer
-		if err := tx.Where("branch_code = ?", branchCode).First(&c).Error; err != nil {
-			return nil, fmt.Errorf("庫點 %s 不存在", branchCode)
+		if err := tx.Where("branch_code = ? AND is_visible = ?", branchCode, true).First(&c).Error; err != nil {
+			return nil, fmt.Errorf("庫點 %s 不存在或已停用", branchCode)
 		}
 		branchCache[branchCode] = c
 		return &c, nil

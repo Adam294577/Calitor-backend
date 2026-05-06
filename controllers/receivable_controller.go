@@ -86,8 +86,23 @@ func GetReceivables(c *gin.Context) {
 	displayMode := c.DefaultQuery("display_mode", "all")
 	includeItems := c.Query("include_items") == "1"
 
-	// 1. 查 shipments
-	query := db.GetRead().Model(&models.Shipment{})
+	// 0. 若指定 customer,先驗證其 is_visible;否則回空(嚴格軟刪除語意)
+	if customerIDStr != "" {
+		if cid, err := strconv.ParseInt(customerIDStr, 10, 64); err == nil {
+			if _, verr := EnsureCustomerVisible(db.GetRead(), cid); verr != nil {
+				resp.Success("成功").SetData(gin.H{
+					"rows":     []receivableRow{},
+					"footer":   receivableFooter{},
+					"customer": nil,
+				}).Send()
+				return
+			}
+		}
+	}
+
+	// 1. 查 shipments(過濾 hidden customer)
+	query := db.GetRead().Model(&models.Shipment{}).
+		Where("customer_id IN (SELECT id FROM retail_customers WHERE is_visible = true)")
 
 	if customerIDStr != "" {
 		if cid, err := strconv.ParseInt(customerIDStr, 10, 64); err == nil {
@@ -254,6 +269,7 @@ func GetReceivables(c *gin.Context) {
 		db.GetRead().Raw(`
 			SELECT COALESCE(SUM(`+receivable.OutstandingRoundedExpr+`), 0)
 			FROM shipments s
+			JOIN retail_customers rc ON rc.id = s.customer_id AND rc.is_visible = true
 			`+receivable.GatherDetailsAggJoin+`
 			WHERE s.customer_id = ?
 				AND s.close_month < ?
@@ -307,12 +323,12 @@ func GetReceivables(c *gin.Context) {
 		footer.StatReceivable = footer.OutstandingTotal + footer.OpeningBalance - footer.PrepaidAmount
 	}
 
-	// 6. 客戶資料（列印需要）
+	// 6. 客戶資料（列印需要;客戶若已停用,前段已 return,此處 customer_id 必為 visible）
 	var customerInfo *receivableCustomerInfo
 	if customerIDStr != "" {
 		if cid, err := strconv.ParseInt(customerIDStr, 10, 64); err == nil {
 			var c models.RetailCustomer
-			if err := db.GetRead().Where("id = ?", cid).First(&c).Error; err == nil {
+			if err := db.GetRead().Where("id = ? AND is_visible = ?", cid, true).First(&c).Error; err == nil {
 				customerInfo = &receivableCustomerInfo{
 					ID:              c.ID,
 					Code:            c.Code,
@@ -355,7 +371,7 @@ func GetReceivableCustomers(c *gin.Context) {
 	dealModeStr := c.Query("deal_mode")
 	displayMode := c.DefaultQuery("display_mode", "all")
 
-	whereSQL := "s.deleted_at IS NULL"
+	whereSQL := "s.deleted_at IS NULL AND EXISTS (SELECT 1 FROM retail_customers rc WHERE rc.id = s.customer_id AND rc.is_visible = true)"
 	args := []any{}
 
 	if dateFrom != "" {
@@ -413,7 +429,7 @@ func GetReceivableCustomers(c *gin.Context) {
 	}
 
 	var customers []models.RetailCustomer
-	db.GetRead().Where("id IN (?)", custIDs).Order("code ASC").Find(&customers)
+	db.GetRead().Where("id IN (?) AND is_visible = ?", custIDs, true).Order("code ASC").Find(&customers)
 
 	rows := make([]receivableCustomerOption, 0, len(customers))
 	for _, c := range customers {
@@ -476,6 +492,7 @@ func GetReceivableAging(c *gin.Context) {
 	db.GetRead().Raw(`
 		SELECT s.customer_id, s.close_month, SUM(`+receivable.OutstandingRoundedExpr+`) AS amount
 		FROM shipments s
+		JOIN retail_customers rc ON rc.id = s.customer_id AND rc.is_visible = true
 		`+receivable.GatherDetailsAggJoin+`
 		WHERE s.deleted_at IS NULL
 			AND s.close_month <> ''
@@ -518,10 +535,10 @@ func GetReceivableAging(c *gin.Context) {
 		custIDs = append(custIDs, row.CustomerID)
 	}
 
-	// 5. 批次查客戶編號/名稱
+	// 5. 批次查客戶編號/名稱(已過濾 hidden,但保險再加一次)
 	if len(custIDs) > 0 {
 		var customers []models.RetailCustomer
-		db.GetRead().Where("id IN (?)", custIDs).Find(&customers)
+		db.GetRead().Where("id IN (?) AND is_visible = ?", custIDs, true).Find(&customers)
 		cmap := map[int64]models.RetailCustomer{}
 		for _, c := range customers {
 			cmap[c.ID] = c

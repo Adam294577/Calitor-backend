@@ -23,38 +23,39 @@ func GetStocks(c *gin.Context) {
 
 	var items []models.Stock
 	query := db.GetRead().
+		Joins("JOIN retail_customers ON retail_customers.id = stocks.customer_id AND retail_customers.is_visible = true").
 		Preload("Customer").
 		Preload("Vendor").
 		Preload("FillPerson").
 		Preload("Recorder").
 		Preload("Purchase").
-		Order("stock_date DESC, stock_no DESC")
+		Order("stocks.stock_date DESC, stocks.stock_no DESC")
 
 	// 進貨單號搜尋
 	if v := c.Query("search"); v != "" {
-		query = ApplySearch(query, v, "stock_no")
+		query = ApplySearch(query, v, "stocks.stock_no")
 	}
 
 	// 廠商單號搜尋（文字備註欄位 vendor_stock_no）
 	if v := c.Query("vendor_stock_no"); v != "" {
 		like := "%" + v + "%"
-		query = query.Where("vendor_stock_no ILIKE ?", like)
+		query = query.Where("stocks.vendor_stock_no ILIKE ?", like)
 	}
 
 	if v := c.Query("customer_id"); v != "" {
-		query = query.Where("customer_id = ?", v)
+		query = query.Where("stocks.customer_id = ?", v)
 	}
 	if v := c.Query("vendor_id"); v != "" {
-		query = query.Where("vendor_id = ?", v)
+		query = query.Where("stocks.vendor_id = ?", v)
 	}
 	if v := c.Query("date_from"); v != "" {
-		query = query.Where("stock_date >= ?", v)
+		query = query.Where("stocks.stock_date >= ?", v)
 	}
 	if v := c.Query("date_to"); v != "" {
-		query = query.Where("stock_date <= ?", v)
+		query = query.Where("stocks.stock_date <= ?", v)
 	}
 	if v := c.Query("stock_mode"); v != "" {
-		query = query.Where("stock_mode = ?", v)
+		query = query.Where("stocks.stock_mode = ?", v)
 	}
 
 	paged, total := Paginate(c, query, &models.Stock{})
@@ -76,6 +77,7 @@ func GetStock(c *gin.Context) {
 
 	var item models.Stock
 	err = db.GetRead().
+		Joins("JOIN retail_customers ON retail_customers.id = stocks.customer_id AND retail_customers.is_visible = true").
 		Preload("Customer").
 		Preload("Vendor").
 		Preload("FillPerson").
@@ -102,7 +104,7 @@ func GetStock(c *gin.Context) {
 		}).
 		Preload("Items.Sizes.SizeOption").
 		Preload("Items.PurchaseItem").
-		Where("id = ?", id).
+		Where("stocks.id = ?", id).
 		First(&item).Error
 	if err != nil {
 		resp.Fail(http.StatusNotFound, "進貨單不存在").Send()
@@ -187,12 +189,13 @@ func CreateStock(c *gin.Context) {
 		return
 	}
 
-	// 查詢客戶 BranchCode
-	var customer models.RetailCustomer
-	if err := db.GetRead().Where("id = ?", req.CustomerID).First(&customer).Error; err != nil {
-		resp.Fail(http.StatusBadRequest, "客戶不存在").Send()
+	// 查詢客戶 BranchCode(同時驗證 is_visible)
+	customerPtr, cerr := EnsureCustomerVisible(db.GetRead(), req.CustomerID)
+	if cerr != nil {
+		resp.Fail(http.StatusBadRequest, ErrMsgCustomerNotVisible).Send()
 		return
 	}
+	customer := *customerPtr
 
 	// 決定前綴
 	if req.StockMode == 0 {
@@ -420,6 +423,13 @@ func UpdateStock(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
 		return
+	}
+
+	if req.CustomerID != 0 {
+		if _, verr := EnsureCustomerVisible(db.GetRead(), req.CustomerID); verr != nil {
+			resp.Fail(http.StatusBadRequest, ErrMsgCustomerNotVisible).Send()
+			return
+		}
 	}
 
 	// 記錄舊的 PurchaseID 與舊 items 的 PurchaseItemIDs，更新後要對所有涉及的採購單重算

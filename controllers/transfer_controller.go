@@ -21,27 +21,31 @@ func GetTransfers(c *gin.Context) {
 
 	var items []models.Transfer
 	query := db.GetRead().
+		// 來源 customer 必須 visible
+		Joins("JOIN retail_customers source_rc ON source_rc.id = transfers.source_customer_id AND source_rc.is_visible = true").
+		// 目的方任一 hidden 即整張隱藏
+		Where("NOT EXISTS (SELECT 1 FROM transfer_items ti JOIN retail_customers dest_rc ON dest_rc.id = ti.dest_customer_id WHERE ti.transfer_id = transfers.id AND dest_rc.is_visible = false)").
 		Preload("SourceCustomer").
 		Preload("FillPerson").
-		Order("transfer_date DESC, id DESC")
+		Order("transfers.transfer_date DESC, transfers.id DESC")
 
-	query = ApplySearch(query, c.Query("search"), "transfer_no")
+	query = ApplySearch(query, c.Query("search"), "transfers.transfer_no")
 
 	if v := c.Query("source_store"); v != "" {
-		query = query.Where("source_store = ?", v)
+		query = query.Where("transfers.source_store = ?", v)
 	}
 	if v := c.Query("dest_store"); v != "" {
 		// 篩選包含此調入庫點的調撥單
-		query = query.Where("id IN (SELECT transfer_id FROM transfer_items WHERE dest_store = ?)", v)
+		query = query.Where("transfers.id IN (SELECT transfer_id FROM transfer_items WHERE dest_store = ?)", v)
 	}
 	if v := c.Query("date_from"); v != "" {
-		query = query.Where("transfer_date >= ?", v)
+		query = query.Where("transfers.transfer_date >= ?", v)
 	}
 	if v := c.Query("date_to"); v != "" {
-		query = query.Where("transfer_date <= ?", v)
+		query = query.Where("transfers.transfer_date <= ?", v)
 	}
 	if v := c.Query("confirmed"); v != "" {
-		query = query.Where("confirmed = ?", v == "1")
+		query = query.Where("transfers.confirmed = ?", v == "1")
 	}
 
 	paged, total := Paginate(c, query, &models.Transfer{})
@@ -63,6 +67,8 @@ func GetTransfer(c *gin.Context) {
 
 	var item models.Transfer
 	err = db.GetRead().
+		Joins("JOIN retail_customers source_rc ON source_rc.id = transfers.source_customer_id AND source_rc.is_visible = true").
+		Where("NOT EXISTS (SELECT 1 FROM transfer_items ti JOIN retail_customers dest_rc ON dest_rc.id = ti.dest_customer_id WHERE ti.transfer_id = transfers.id AND dest_rc.is_visible = false)").
 		Preload("SourceCustomer").
 		Preload("FillPerson").
 		Preload("Recorder").
@@ -78,12 +84,16 @@ func GetTransfer(c *gin.Context) {
 		Preload("Items.Product.Size3Group.Options", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order ASC")
 		}).
+		Preload("Items.Product.CategoryMaps", func(db *gorm.DB) *gorm.DB {
+			return db.Where("category_type = 5")
+		}).
+		Preload("Items.Product.CategoryMaps.Category5").
 		Preload("Items.SizeGroup.Options", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order ASC")
 		}).
 		Preload("Items.Sizes.SizeOption").
 		Preload("Items.DestCustomer").
-		Where("id = ?", id).
+		Where("transfers.id = ?", id).
 		First(&item).Error
 	if err != nil {
 		resp.Fail(http.StatusNotFound, "調撥單不存在").Send()
@@ -122,14 +132,15 @@ func CreateTransfer(c *gin.Context) {
 		return
 	}
 
-	// 查調出庫點
-	var sourceCustomer models.RetailCustomer
-	if err := db.GetRead().Where("branch_code = ?", req.SourceStore).First(&sourceCustomer).Error; err != nil {
-		resp.Fail(http.StatusBadRequest, "調出庫點不存在").Send()
+	// 查調出庫點(必須 is_visible)
+	sourcePtr, serr := EnsureCustomerVisibleByBranchCode(db.GetRead(), req.SourceStore)
+	if serr != nil {
+		resp.Fail(http.StatusBadRequest, "調出庫點不存在或已停用").Send()
 		return
 	}
+	sourceCustomer := *sourcePtr
 
-	// 查調入庫點（快取）
+	// 查調入庫點（快取;同樣驗 is_visible）
 	destCustomerMap := make(map[string]*models.RetailCustomer)
 	for _, reqItem := range req.Items {
 		if reqItem.DestStore == "" {
@@ -137,12 +148,12 @@ func CreateTransfer(c *gin.Context) {
 			return
 		}
 		if _, ok := destCustomerMap[reqItem.DestStore]; !ok {
-			var dc models.RetailCustomer
-			if err := db.GetRead().Where("branch_code = ?", reqItem.DestStore).First(&dc).Error; err != nil {
-				resp.Fail(http.StatusBadRequest, fmt.Sprintf("調入庫點 %s 不存在", reqItem.DestStore)).Send()
+			dc, derr := EnsureCustomerVisibleByBranchCode(db.GetRead(), reqItem.DestStore)
+			if derr != nil {
+				resp.Fail(http.StatusBadRequest, fmt.Sprintf("調入庫點 %s 不存在或已停用", reqItem.DestStore)).Send()
 				return
 			}
-			destCustomerMap[reqItem.DestStore] = &dc
+			destCustomerMap[reqItem.DestStore] = dc
 		}
 	}
 
@@ -304,14 +315,15 @@ func UpdateTransfer(c *gin.Context) {
 		return
 	}
 
-	// 查新的調出庫點
-	var sourceCustomer models.RetailCustomer
-	if err := db.GetRead().Where("branch_code = ?", req.SourceStore).First(&sourceCustomer).Error; err != nil {
-		resp.Fail(http.StatusBadRequest, "調出庫點不存在").Send()
+	// 查新的調出庫點(必須 is_visible)
+	sourcePtr, serr := EnsureCustomerVisibleByBranchCode(db.GetRead(), req.SourceStore)
+	if serr != nil {
+		resp.Fail(http.StatusBadRequest, "調出庫點不存在或已停用").Send()
 		return
 	}
+	sourceCustomer := *sourcePtr
 
-	// 查調入庫點（快取）
+	// 查調入庫點（快取;同樣驗 is_visible）
 	destCustomerMap := make(map[string]*models.RetailCustomer)
 	for _, reqItem := range req.Items {
 		if reqItem.DestStore == "" {
@@ -319,12 +331,12 @@ func UpdateTransfer(c *gin.Context) {
 			return
 		}
 		if _, ok := destCustomerMap[reqItem.DestStore]; !ok {
-			var dc models.RetailCustomer
-			if err := db.GetRead().Where("branch_code = ?", reqItem.DestStore).First(&dc).Error; err != nil {
-				resp.Fail(http.StatusBadRequest, fmt.Sprintf("調入庫點 %s 不存在", reqItem.DestStore)).Send()
+			dc, derr := EnsureCustomerVisibleByBranchCode(db.GetRead(), reqItem.DestStore)
+			if derr != nil {
+				resp.Fail(http.StatusBadRequest, fmt.Sprintf("調入庫點 %s 不存在或已停用", reqItem.DestStore)).Send()
 				return
 			}
-			destCustomerMap[reqItem.DestStore] = &dc
+			destCustomerMap[reqItem.DestStore] = dc
 		}
 	}
 

@@ -54,7 +54,8 @@ type productSalesSummaryRow struct {
 //   - date_from / date_to：銷售日期 YYYYMMDD；date_to 未帶時預設今日
 //   - tx_type：all | sell | shipment
 //   - trade_type：all | purchase | consignment（對應 products.trade_mode 1/2）
-//   - page / page_size：分頁
+//
+// 不分頁:此報表為對帳用聚合報表,需一次取回全部符合條件的商品。
 func GetProductSalesSummary(c *gin.Context) {
 	resp := response.New(c)
 	db := models.PostgresNew()
@@ -100,18 +101,8 @@ func GetProductSalesSummary(c *gin.Context) {
 		tradeType = "all"
 	}
 
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	if page < 1 {
-		page = 1
-	}
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "100"))
-	if pageSize <= 0 {
-		pageSize = 100
-	}
-	if pageSize > 500 {
-		pageSize = 500
-	}
-	offset := (page - 1) * pageSize
+	// 不分頁:此報表為對帳用聚合報表,需一次取回全部符合條件的商品。
+	// 分頁會造成「全部 != 銷貨 + 出貨」的資料截斷錯覺(top-N 商品池在不同 tx_type 下不同)。
 
 	// ---------- 主查：products 列表 ----------
 	where := "WHERE p.deleted_at IS NULL"
@@ -191,14 +182,6 @@ func GetProductSalesSummary(c *gin.Context) {
 		}
 	}
 
-	// 總筆數
-	var total int64
-	countSQL := "SELECT COUNT(*) FROM products p " + where
-	if err := db.GetRead().Raw(countSQL, args...).Scan(&total).Error; err != nil {
-		resp.Panic(err).Send()
-		return
-	}
-
 	// 主列
 	type productHead struct {
 		ID           int64  `gorm:"column:id"`
@@ -229,22 +212,18 @@ LEFT JOIN product_vendors pv ON pv.product_id = p.id AND pv.is_primary = true
 LEFT JOIN vendors v ON v.id = pv.vendor_id
 %s
 ORDER BY %s
-LIMIT ? OFFSET ?
 `, where, ModelCodeOrderBy("p.model_code"))
 
-	argsPage := append(append([]interface{}{}, args...), pageSize, offset)
 	var heads []productHead
-	if err := db.GetRead().Raw(mainSQL, argsPage...).Scan(&heads).Error; err != nil {
+	if err := db.GetRead().Raw(mainSQL, args...).Scan(&heads).Error; err != nil {
 		resp.Panic(err).Send()
 		return
 	}
 
 	if len(heads) == 0 {
 		resp.Success("查詢成功").SetData(gin.H{
-			"rows":      []productSalesSummaryRow{},
-			"total":     total,
-			"page":      page,
-			"page_size": pageSize,
+			"rows":  []productSalesSummaryRow{},
+			"total": 0,
 		}).Send()
 		return
 	}
@@ -549,9 +528,7 @@ GROUP BY si.product_id, sis.size_option_id
 	}
 
 	resp.Success("查詢成功").SetData(gin.H{
-		"rows":      rowsOut,
-		"total":     total,
-		"page":      page,
-		"page_size": pageSize,
+		"rows":  rowsOut,
+		"total": int64(len(rowsOut)),
 	}).Send()
 }

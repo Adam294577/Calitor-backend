@@ -45,8 +45,8 @@ func Update(tx *gorm.DB, id int64, payload UpdatePayload, recorderID int64) erro
 	}
 
 	var customer models.RetailCustomer
-	if err := tx.Where("branch_code = ?", payload.ModifyStore).First(&customer).Error; err != nil {
-		return fmt.Errorf("調整庫點不存在: %w", err)
+	if err := tx.Where("branch_code = ? AND is_visible = ?", payload.ModifyStore, true).First(&customer).Error; err != nil {
+		return fmt.Errorf("調整庫點不存在或已停用: %w", err)
 	}
 
 	if err := revertItems(tx, id, existing.CustomerID); err != nil {

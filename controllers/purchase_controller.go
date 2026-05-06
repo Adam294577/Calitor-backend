@@ -22,26 +22,27 @@ func GetPurchases(c *gin.Context) {
 
 	var items []models.Purchase
 	query := db.GetRead().
+		Joins("JOIN retail_customers ON retail_customers.id = purchases.customer_id AND retail_customers.is_visible = true").
 		Preload("Customer").
 		Preload("Vendor").
-		Order("purchase_date DESC, id DESC")
+		Order("purchases.purchase_date DESC, purchases.id DESC")
 
-	query = ApplySearch(query, c.Query("search"), "purchase_no")
+	query = ApplySearch(query, c.Query("search"), "purchases.purchase_no")
 
 	if v := c.Query("customer_id"); v != "" {
-		query = query.Where("customer_id = ?", v)
+		query = query.Where("purchases.customer_id = ?", v)
 	}
 	if v := c.Query("vendor_id"); v != "" {
-		query = query.Where("vendor_id = ?", v)
+		query = query.Where("purchases.vendor_id = ?", v)
 	}
 	if v := c.Query("date_from"); v != "" {
-		query = query.Where("purchase_date >= ?", v)
+		query = query.Where("purchases.purchase_date >= ?", v)
 	}
 	if v := c.Query("date_to"); v != "" {
-		query = query.Where("purchase_date <= ?", v)
+		query = query.Where("purchases.purchase_date <= ?", v)
 	}
 	if v := c.Query("deal_mode"); v != "" {
-		query = query.Where("deal_mode = ?", v)
+		query = query.Where("purchases.deal_mode = ?", v)
 	}
 
 	paged, total := Paginate(c, query, &models.Purchase{})
@@ -63,6 +64,7 @@ func GetPurchase(c *gin.Context) {
 
 	var item models.Purchase
 	err = db.GetRead().
+		Joins("JOIN retail_customers ON retail_customers.id = purchases.customer_id AND retail_customers.is_visible = true").
 		Preload("Items", func(db *gorm.DB) *gorm.DB {
 			return db.Order("item_order ASC")
 		}).
@@ -80,7 +82,7 @@ func GetPurchase(c *gin.Context) {
 			return db.Order("sort_order ASC")
 		}).
 		Preload("Items.Sizes").
-		Where("id = ?", id).
+		Where("purchases.id = ?", id).
 		First(&item).Error
 	if err != nil {
 		resp.Fail(http.StatusNotFound, "採購單不存在").Send()
@@ -165,12 +167,13 @@ func CreatePurchase(c *gin.Context) {
 		return
 	}
 
-	// 查詢客戶 BranchCode
-	var customer models.RetailCustomer
-	if err := db.GetRead().Where("id = ?", req.CustomerID).First(&customer).Error; err != nil {
-		resp.Fail(http.StatusBadRequest, "客戶不存在").Send()
+	// 查詢客戶 BranchCode(同時驗證 is_visible)
+	customerPtr, cerr := EnsureCustomerVisible(db.GetRead(), req.CustomerID)
+	if cerr != nil {
+		resp.Fail(http.StatusBadRequest, ErrMsgCustomerNotVisible).Send()
 		return
 	}
+	customer := *customerPtr
 
 	// 產生採購單號: VendorCode + BranchCode + YYYYMM + 流水號4碼
 	yyyymm := ""
@@ -327,6 +330,13 @@ func UpdatePurchase(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
 		return
+	}
+
+	if req.CustomerID != 0 {
+		if _, verr := EnsureCustomerVisible(db.GetRead(), req.CustomerID); verr != nil {
+			resp.Fail(http.StatusBadRequest, ErrMsgCustomerNotVisible).Send()
+			return
+		}
 	}
 
 	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {

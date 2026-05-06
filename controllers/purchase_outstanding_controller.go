@@ -51,8 +51,10 @@ func GetPurchaseOutstanding(c *gin.Context) {
 	modelCodeTo := c.Query("model_code_to")
 	purchaseNoSearch := c.Query("purchase_no")
 
-	// 1. 查 purchases WHERE delivery_status < 2
-	query := db.GetRead().Model(&models.Purchase{}).Where("delivery_status < 2")
+	// 1. 查 purchases WHERE delivery_status < 2 (排除 hidden 客戶)
+	query := db.GetRead().Model(&models.Purchase{}).
+		Where("delivery_status < 2").
+		Where("customer_id IN (SELECT id FROM retail_customers WHERE is_visible = true)")
 
 	if dateFrom != "" {
 		query = query.Where("purchase_date >= ?", dateFrom)

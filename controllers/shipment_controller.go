@@ -99,6 +99,7 @@ func GetShipment(c *gin.Context) {
 
 	var item models.Shipment
 	err = db.GetRead().
+		Joins("JOIN retail_customers ON retail_customers.id = shipments.customer_id AND retail_customers.is_visible = true").
 		Preload("Customer").
 		Preload("FillPerson").
 		Preload("Recorder").
@@ -126,7 +127,7 @@ func GetShipment(c *gin.Context) {
 			return db.Order("sort_order ASC")
 		}).
 		Preload("Items.Sizes.SizeOption").
-		Where("id = ?", id).
+		Where("shipments.id = ?", id).
 		First(&item).Error
 	if err != nil {
 		resp.Fail(http.StatusNotFound, "出貨單不存在").Send()
@@ -228,12 +229,13 @@ func CreateShipment(c *gin.Context) {
 		return
 	}
 
-	// 查詢客戶
-	var customer models.RetailCustomer
-	if err := db.GetRead().Where("id = ?", req.CustomerID).First(&customer).Error; err != nil {
-		resp.Fail(http.StatusBadRequest, "客戶不存在").Send()
+	// 查詢客戶(同時驗證 is_visible)
+	customerPtr, cerr := EnsureCustomerVisible(db.GetRead(), req.CustomerID)
+	if cerr != nil {
+		resp.Fail(http.StatusBadRequest, ErrMsgCustomerNotVisible).Send()
 		return
 	}
+	customer := *customerPtr
 
 	// 信用額度檢查：CreditLimit > 0 時，未沖銷餘額不可超過(僅出貨模式檢查,退貨不檢查)
 	if req.ShipmentMode != 4 && customer.CreditLimit > 0 {
@@ -545,6 +547,13 @@ func UpdateShipment(c *gin.Context) {
 		return
 	}
 
+	if req.CustomerID != 0 {
+		if _, verr := EnsureCustomerVisible(db.GetRead(), req.CustomerID); verr != nil {
+			resp.Fail(http.StatusBadRequest, ErrMsgCustomerNotVisible).Send()
+			return
+		}
+	}
+
 	// 收集舊的關聯 orderIDs
 	oldOrderIDSet := map[int64]bool{}
 	var oldItems []models.ShipmentItem
@@ -850,9 +859,10 @@ func GetCustomerCredit(c *gin.Context) {
 	db := models.PostgresNew()
 	defer db.Close()
 
-	var customer models.RetailCustomer
-	if err := db.GetRead().Where("id = ?", customerID).First(&customer).Error; err != nil {
-		resp.Fail(404, "客戶不存在").Send()
+	cidNum, _ := strconv.ParseInt(customerID, 10, 64)
+	customer, err := EnsureCustomerVisible(db.GetRead(), cidNum)
+	if err != nil {
+		resp.Fail(404, ErrMsgCustomerNotVisible).Send()
 		return
 	}
 
@@ -906,11 +916,13 @@ func BarcodeParse(c *gin.Context) {
 		if shipDate == "" {
 			shipDate = time.Now().Format("20060102")
 		}
-		var cust models.RetailCustomer
-		if err := db.GetRead().Where("id = ?", req.CustomerID).First(&cust).Error; err == nil {
-			if cm, cnt, _ := CheckCustomerOverdueShipments(db.GetRead(), req.CustomerID, shipDate, cust.Month); cnt > 0 {
-				overdue = &overdueInfo{CutoffMonth: cm, Count: cnt}
-			}
+		cust, cerr := EnsureCustomerVisible(db.GetRead(), req.CustomerID)
+		if cerr != nil {
+			resp.Fail(http.StatusBadRequest, ErrMsgCustomerNotVisible).Send()
+			return
+		}
+		if cm, cnt, _ := CheckCustomerOverdueShipments(db.GetRead(), req.CustomerID, shipDate, cust.Month); cnt > 0 {
+			overdue = &overdueInfo{CutoffMonth: cm, Count: cnt}
 		}
 	}
 
@@ -1028,14 +1040,12 @@ func BarcodeParse(c *gin.Context) {
 		return 1
 	}
 
-	// 沒命中未交單時的 fallback 批價：first_pu_price > wholesale_tax_incl > wholesale
-	// (對齊 SizeQtyTable.vue type='shipment' 的邏輯)
+	// 沒命中未交單時的 fallback 批價:first_pu_price > wholesale(未稅)
+	// ship_price 契約是未稅單價;wholesale_tax_incl 是建檔顯示用含稅,不可進入此 fallback
+	// (對齊 SizeQtyTable.vue type='shipment' 鍵盤輸入的邏輯)
 	fallbackShipPrice := func(prod *models.Product) float64 {
 		if pu := firstPuPriceMap[prod.ID]; pu > 0 {
 			return pu
-		}
-		if prod.WholesaleTaxIncl > 0 {
-			return prod.WholesaleTaxIncl
 		}
 		return prod.Wholesale
 	}

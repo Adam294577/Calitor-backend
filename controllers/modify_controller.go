@@ -21,20 +21,21 @@ func GetModifies(c *gin.Context) {
 
 	var items []models.Modify
 	query := db.GetRead().
+		Joins("JOIN retail_customers ON retail_customers.id = modifies.customer_id AND retail_customers.is_visible = true").
 		Preload("Customer").
 		Preload("FillPerson").
-		Order("modify_date DESC, id DESC")
+		Order("modifies.modify_date DESC, modifies.id DESC")
 
-	query = ApplySearch(query, c.Query("search"), "modify_no")
+	query = ApplySearch(query, c.Query("search"), "modifies.modify_no")
 
 	if v := c.Query("modify_store"); v != "" {
-		query = query.Where("modify_store = ?", v)
+		query = query.Where("modifies.modify_store = ?", v)
 	}
 	if v := c.Query("date_from"); v != "" {
-		query = query.Where("modify_date >= ?", v)
+		query = query.Where("modifies.modify_date >= ?", v)
 	}
 	if v := c.Query("date_to"); v != "" {
-		query = query.Where("modify_date <= ?", v)
+		query = query.Where("modifies.modify_date <= ?", v)
 	}
 
 	paged, total := Paginate(c, query, &models.Modify{})
@@ -56,6 +57,7 @@ func GetModify(c *gin.Context) {
 
 	var item models.Modify
 	err = db.GetRead().
+		Joins("JOIN retail_customers ON retail_customers.id = modifies.customer_id AND retail_customers.is_visible = true").
 		Preload("Customer").
 		Preload("FillPerson").
 		Preload("Recorder").
@@ -75,7 +77,7 @@ func GetModify(c *gin.Context) {
 			return db.Order("sort_order ASC")
 		}).
 		Preload("Items.Sizes.SizeOption").
-		Where("id = ?", id).
+		Where("modifies.id = ?", id).
 		First(&item).Error
 	if err != nil {
 		resp.Fail(http.StatusNotFound, "調整單不存在").Send()
@@ -111,12 +113,13 @@ func CreateModify(c *gin.Context) {
 		return
 	}
 
-	// 由 ModifyStore(branch_code) 查出庫點客戶
-	var customer models.RetailCustomer
-	if err := db.GetRead().Where("branch_code = ?", req.ModifyStore).First(&customer).Error; err != nil {
-		resp.Fail(http.StatusBadRequest, "調整庫點不存在").Send()
+	// 由 ModifyStore(branch_code) 查出庫點客戶(必須 is_visible)
+	customerPtr, cerr := EnsureCustomerVisibleByBranchCode(db.GetRead(), req.ModifyStore)
+	if cerr != nil {
+		resp.Fail(http.StatusBadRequest, "調整庫點不存在或已停用").Send()
 		return
 	}
+	customer := *customerPtr
 
 	// 產生調整單號: BranchCode + YYYYMMDD + 3碼流水號
 	prefix := customer.BranchCode + req.ModifyDate
@@ -233,6 +236,13 @@ func UpdateModify(c *gin.Context) {
 
 	db := models.PostgresNew()
 	defer db.Close()
+
+	if req.ModifyStore != "" {
+		if _, verr := EnsureCustomerVisibleByBranchCode(db.GetRead(), req.ModifyStore); verr != nil {
+			resp.Fail(http.StatusBadRequest, "調整庫點不存在或已停用").Send()
+			return
+		}
+	}
 
 	adminId, _ := c.Get("AdminId")
 	var recorderID int64
