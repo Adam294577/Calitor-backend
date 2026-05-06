@@ -125,8 +125,8 @@ func CreateBatch(tx *gorm.DB, payload CreateBatchPayload, recorderID int64) ([]C
 		}
 		customer, cached := customerCache[effCustomerID]
 		if !cached {
-			if err := tx.Where("id = ?", effCustomerID).First(&customer).Error; err != nil {
-				return nil, fmt.Errorf("第 %d 張:客戶 ID %d 不存在", idx+1, effCustomerID)
+			if err := tx.Where("id = ? AND is_visible = ?", effCustomerID, true).First(&customer).Error; err != nil {
+				return nil, fmt.Errorf("第 %d 張:客戶不存在或已停用 (ID %d)", idx+1, effCustomerID)
 			}
 			customerCache[effCustomerID] = customer
 		}

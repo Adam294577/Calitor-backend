@@ -90,6 +90,7 @@ func GetRetailSell(c *gin.Context) {
 
 	var item models.RetailSell
 	query := db.GetRead().
+		Joins("JOIN retail_customers ON retail_customers.id = retail_sells.customer_id AND retail_customers.is_visible = true").
 		Preload("Customer").
 		Preload("SellPerson").
 		Preload("Recorder").
@@ -115,7 +116,7 @@ func GetRetailSell(c *gin.Context) {
 	} else {
 		query = query.Preload("Items.Product.SizeStocks")
 	}
-	err = query.Where("id = ?", id).First(&item).Error
+	err = query.Where("retail_sells.id = ?", id).First(&item).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			resp.Fail(http.StatusNotFound, "銷售單不存在").Send()
@@ -172,12 +173,13 @@ func CreateRetailSell(c *gin.Context) {
 		return
 	}
 
-	// 查詢客戶取 branch_code
-	var customer models.RetailCustomer
-	if err := db.GetRead().Where("id = ?", req.CustomerID).First(&customer).Error; err != nil {
-		resp.Fail(http.StatusBadRequest, "客戶不存在").Send()
+	// 查詢客戶取 branch_code(同時驗證 is_visible)
+	customerPtr, cerr := EnsureCustomerVisible(db.GetRead(), req.CustomerID)
+	if cerr != nil {
+		resp.Fail(http.StatusBadRequest, ErrMsgCustomerNotVisible).Send()
 		return
 	}
+	customer := *customerPtr
 
 	sellStore := req.SellStore
 	if sellStore == "" {
@@ -399,6 +401,13 @@ func UpdateRetailSell(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
 		return
+	}
+
+	if req.CustomerID != 0 {
+		if _, verr := EnsureCustomerVisible(db.GetRead(), req.CustomerID); verr != nil {
+			resp.Fail(http.StatusBadRequest, ErrMsgCustomerNotVisible).Send()
+			return
+		}
 	}
 
 	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {

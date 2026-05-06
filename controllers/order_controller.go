@@ -60,6 +60,7 @@ func GetOrder(c *gin.Context) {
 
 	var item models.Order
 	err = db.GetRead().
+		Joins("JOIN retail_customers ON retail_customers.id = orders.customer_id AND retail_customers.is_visible = true").
 		Preload("Customer").
 		Preload("Brand").
 		Preload("FillPerson").
@@ -85,7 +86,7 @@ func GetOrder(c *gin.Context) {
 			return db.Order("sort_order ASC")
 		}).
 		Preload("Items.Sizes.SizeOption").
-		Where("id = ?", id).
+		Where("orders.id = ?", id).
 		First(&item).Error
 	if err != nil {
 		resp.Fail(http.StatusNotFound, "訂貨單不存在").Send()
@@ -175,6 +176,11 @@ func CreateOrder(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
+		return
+	}
+
+	if _, verr := EnsureCustomerVisible(db.GetRead(), req.CustomerID); verr != nil {
+		resp.Fail(http.StatusBadRequest, ErrMsgCustomerNotVisible).Send()
 		return
 	}
 
@@ -331,6 +337,13 @@ func UpdateOrder(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
 		return
+	}
+
+	if req.CustomerID != 0 {
+		if _, verr := EnsureCustomerVisible(db.GetRead(), req.CustomerID); verr != nil {
+			resp.Fail(http.StatusBadRequest, ErrMsgCustomerNotVisible).Send()
+			return
+		}
 	}
 
 	// 查出已停貨的舊明細（cancel_flag >= 2），保護不被修改
@@ -490,7 +503,8 @@ func SearchOrders(c *gin.Context) {
 	defer db.Close()
 
 	query := db.GetRead().
-		Where("delivery_status < 2").
+		Joins("JOIN retail_customers ON retail_customers.id = orders.customer_id AND retail_customers.is_visible = true").
+		Where("orders.delivery_status < 2").
 		Preload("Items", func(db *gorm.DB) *gorm.DB {
 			return db.Order("item_order ASC")
 		}).
@@ -512,13 +526,13 @@ func SearchOrders(c *gin.Context) {
 			return db.Order("sort_order ASC")
 		}).
 		Preload("Items.Sizes.SizeOption").
-		Order("order_date DESC, order_no DESC")
+		Order("orders.order_date DESC, orders.order_no DESC")
 
 	if v := c.Query("customer_id"); v != "" {
-		query = query.Where("customer_id = ?", v)
+		query = query.Where("orders.customer_id = ?", v)
 	}
 	if v := c.Query("search"); v != "" {
-		query = ApplySearch(query, v, "order_no")
+		query = ApplySearch(query, v, "orders.order_no")
 	}
 
 	var orders []models.Order
@@ -686,6 +700,7 @@ func SearchOrderItems(c *gin.Context) {
 	query := db.GetRead().
 		Where("order_items.cancel_flag < 2").
 		Joins("JOIN orders ON orders.id = order_items.order_id AND orders.deleted_at IS NULL AND orders.delivery_status < 2 AND orders.customer_id = ?", customerID).
+		Joins("JOIN retail_customers ON retail_customers.id = orders.customer_id AND retail_customers.is_visible = true").
 		Preload("Product").
 		Preload("Product.Size1Group.Options", func(db *gorm.DB) *gorm.DB {
 			return db.Order("sort_order ASC")

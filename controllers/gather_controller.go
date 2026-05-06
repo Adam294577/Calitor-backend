@@ -20,33 +20,34 @@ func GetGathers(c *gin.Context) {
 
 	var items []models.Gather
 	query := db.GetRead().
+		Joins("JOIN retail_customers ON retail_customers.id = gathers.customer_id AND retail_customers.is_visible = true").
 		Preload("Customer").
 		Preload("GatherPerson").
-		Order("gather_date DESC, id DESC")
+		Order("gathers.gather_date DESC, gathers.id DESC")
 
 	if v := c.Query("search"); v != "" {
-		query = ApplySearch(query, v, "gather_no")
+		query = ApplySearch(query, v, "gathers.gather_no")
 	}
 	if v := c.Query("customer_id"); v != "" {
-		query = query.Where("customer_id = ?", v)
+		query = query.Where("gathers.customer_id = ?", v)
 	}
 	if v := c.Query("date_from"); v != "" {
-		query = query.Where("gather_date >= ?", v)
+		query = query.Where("gathers.gather_date >= ?", v)
 	}
 	if v := c.Query("date_to"); v != "" {
-		query = query.Where("gather_date <= ?", v)
+		query = query.Where("gathers.gather_date <= ?", v)
 	}
 	if v := c.Query("check_no"); v != "" {
-		query = ApplySearch(query, v, "check_no")
+		query = ApplySearch(query, v, "gathers.check_no")
 	}
 	if v := c.Query("bank_account_no"); v != "" {
-		query = query.Where("bank_account_no = ?", v)
+		query = query.Where("gathers.bank_account_no = ?", v)
 	}
 	if v := c.Query("due_date_from"); v != "" {
-		query = query.Where("check_due_date >= ?", v)
+		query = query.Where("gathers.check_due_date >= ?", v)
 	}
 	if v := c.Query("due_date_to"); v != "" {
-		query = query.Where("check_due_date <= ?", v)
+		query = query.Where("gathers.check_due_date <= ?", v)
 	}
 
 	paged, total := Paginate(c, query, &models.Gather{})
@@ -92,6 +93,7 @@ func GetGather(c *gin.Context) {
 	id := c.Param("id")
 	var gather models.Gather
 	err := db.GetRead().
+		Joins("JOIN retail_customers ON retail_customers.id = gathers.customer_id AND retail_customers.is_visible = true").
 		Preload("Customer").
 		Preload("GatherPerson").
 		Preload("Recorder").
@@ -99,7 +101,8 @@ func GetGather(c *gin.Context) {
 			return db.Order("item_order ASC")
 		}).
 		Preload("Items.Shipment").
-		First(&gather, id).Error
+		Where("gathers.id = ?", id).
+		First(&gather).Error
 
 	if err != nil {
 		resp.Fail(http.StatusNotFound, "收款單不存在").Send()
@@ -129,6 +132,12 @@ func GetPrepaidCredit(c *gin.Context) {
 	defer db.Close()
 
 	customerID := c.Param("customer_id")
+	if cid, perr := strconv.ParseInt(customerID, 10, 64); perr == nil {
+		if _, err := EnsureCustomerVisible(db.GetRead(), cid); err != nil {
+			resp.Fail(http.StatusNotFound, ErrMsgCustomerNotVisible).Send()
+			return
+		}
+	}
 
 	// 客戶所有 gather 的 actual_amount 總和（實收金額）
 	var totalReceived float64
@@ -168,6 +177,12 @@ func GetUnclearedShipments(c *gin.Context) {
 	defer db.Close()
 
 	customerID := c.Param("customer_id")
+	if cid, perr := strconv.ParseInt(customerID, 10, 64); perr == nil {
+		if _, err := EnsureCustomerVisible(db.GetRead(), cid); err != nil {
+			resp.Fail(http.StatusNotFound, ErrMsgCustomerNotVisible).Send()
+			return
+		}
+	}
 	excludeGatherID := int64(0)
 	if v := c.Query("exclude_gather_id"); v != "" {
 		excludeGatherID, _ = strconv.ParseInt(v, 10, 64)
@@ -318,6 +333,11 @@ func CreateGather(c *gin.Context) {
 		return
 	}
 
+	if _, verr := EnsureCustomerVisible(db.GetRead(), req.CustomerID); verr != nil {
+		resp.Fail(http.StatusBadRequest, ErrMsgCustomerNotVisible).Send()
+		return
+	}
+
 	// 自動編號: YYYYMMDD + 3位序號
 	yyyymmdd := ""
 	if len(req.GatherDate) >= 8 {
@@ -429,6 +449,13 @@ func UpdateGather(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.Fail(http.StatusBadRequest, "參數錯誤: "+err.Error()).Send()
 		return
+	}
+
+	if req.CustomerID != 0 {
+		if _, verr := EnsureCustomerVisible(db.GetRead(), req.CustomerID); verr != nil {
+			resp.Fail(http.StatusBadRequest, ErrMsgCustomerNotVisible).Send()
+			return
+		}
 	}
 
 	err := db.GetWrite().Transaction(func(tx *gorm.DB) error {

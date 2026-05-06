@@ -61,7 +61,8 @@ func GetInventory(c *gin.Context) {
 
 	// 組建 WHERE 條件(直接使用 product_size_stocks 別名 pss,進貨加/出貨扣皆已即時更新)
 	// p.is_visible = true 排除被公司決定下架的商品(如 remove.md 列出的清單)
-	where := "WHERE p.deleted_at IS NULL AND p.is_visible = true"
+	// rc.is_visible = true:過濾掉「不顯示」的客戶/庫點(等價軟刪除)
+	where := "WHERE p.deleted_at IS NULL AND p.is_visible = true AND rc.is_visible = true"
 	args := []interface{}{}
 
 	if v := c.Query("customer_ids"); v != "" {
