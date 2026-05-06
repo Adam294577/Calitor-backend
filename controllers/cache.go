@@ -3,6 +3,7 @@ package controllers
 import (
 	"fmt"
 	"project/services/redis"
+	"reflect"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -21,6 +22,29 @@ type cachedResponse struct {
 	Total int64       `json:"Total"`
 }
 
+// isPartialFailure 偵測 cache 內容是否為 partial failure（query 失敗但仍寫進 cache）。
+// 條件：Total > 0 但 Data 是 nil 或長度 0 — 不該命中，應 fall through 重撈 db。
+func isPartialFailure(data interface{}, total int64) bool {
+	if total <= 0 {
+		return false
+	}
+	if data == nil {
+		return true
+	}
+	v := reflect.ValueOf(data)
+	switch v.Kind() {
+	case reflect.Slice, reflect.Array, reflect.Map:
+		if v.IsNil() || v.Len() == 0 {
+			return true
+		}
+	case reflect.Ptr, reflect.Interface:
+		if v.IsNil() {
+			return true
+		}
+	}
+	return false
+}
+
 // tryListCache 嘗試從 Redis 讀取快取，命中時直接回應並回傳 true
 func tryListCache(c *gin.Context) bool {
 	rc := redis.Global()
@@ -29,6 +53,12 @@ func tryListCache(c *gin.Context) bool {
 	}
 	var cached cachedResponse
 	if err := rc.GetJSON(listCacheKey(c), &cached); err != nil {
+		return false
+	}
+	// partial failure 自我修復：偵測到 stale 就 fall through 重撈 db
+	// （並順便清掉這筆髒 cache，避免其他 instance 也踩到）
+	if isPartialFailure(cached.Data, cached.Total) {
+		rc.Delete(listCacheKey(c))
 		return false
 	}
 	c.JSON(200, gin.H{
@@ -41,9 +71,13 @@ func tryListCache(c *gin.Context) bool {
 }
 
 // setListCache 將列表結果寫入快取
+// partial failure（Total > 0 但 Data 為 nil/空）不寫入，避免污染 cache。
 func setListCache(c *gin.Context, data interface{}, total int64) {
 	rc := redis.Global()
 	if !rc.IsAvailable() {
+		return
+	}
+	if isPartialFailure(data, total) {
 		return
 	}
 	rc.SetJSON(listCacheKey(c), cachedResponse{Data: data, Total: total}, listCacheTTL)
