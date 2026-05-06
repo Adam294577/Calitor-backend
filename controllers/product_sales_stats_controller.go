@@ -215,11 +215,14 @@ func GetProductSalesStats(c *gin.Context) {
 		groupExpr = "pb.name, pc.name"
 		orderExpr = "pb.name, pc.name"
 	case "branch":
-		// 分店識別 = 銷貨/出貨單的 store_code 字串;名稱用 customer.code 反查
-		key1Expr = "COALESCE(sa.store_code, '')"
+		// 分店識別 = 反查到的 customer.code(無對應 customer 時 fallback 原始 store_code 字串)。
+		// 銷貨單 sell_store / 出貨單 ship_store 可能存 customer.code(如 '01')也可能存
+		// customer.branch_code(如 'YY'),兩者其實是同一家店 — 透過下方 LATERAL OR 反查
+		// 統一成 customer.code 才能正確合併分組。
+		key1Expr = "COALESCE(rc.code, sa.store_code, '')"
 		key2Expr = "COALESCE(NULLIF(rc.short_name, ''), rc.name, '')"
-		groupExpr = "sa.store_code, rc.name, rc.short_name"
-		orderExpr = "sa.store_code"
+		groupExpr = "COALESCE(rc.code, sa.store_code, ''), rc.name, rc.short_name"
+		orderExpr = "COALESCE(rc.code, sa.store_code, '')"
 	}
 
 	// 商品/銷售篩選 WHERE
@@ -246,18 +249,19 @@ func GetProductSalesStats(c *gin.Context) {
 		whereParts = append(whereParts, "UPPER(v.code) <= UPPER(?)")
 		whereArgs = append(whereArgs, vendorCodeTo)
 	}
-	// 分店篩選:直接用銷貨/出貨單的 store_code (sell_store/ship_store) 字串比對。
-	// 「依分店」group_by 與「分店區間」都加上 store_code 非空條件,排除沒有指定分店的紀錄。
+	// 分店篩選:用「反查後的 customer.code」(LATERAL rc.code) 比對,使用者輸入 code 或 branch_code
+	// 都能對到同一家店;反查不到的紀錄 fallback 到原 store_code 字串(避免被誤殺)。
+	// 「依分店」group_by 與「分店區間」都加上非空條件,排除沒有指定分店的紀錄。
 	needsBranchFilter := branchCodeFrom != "" || branchCodeTo != "" || groupBy == "branch"
 	if needsBranchFilter {
-		whereParts = append(whereParts, "sa.store_code <> ''")
+		whereParts = append(whereParts, "COALESCE(rc.code, sa.store_code, '') <> ''")
 	}
 	if branchCodeFrom != "" {
-		whereParts = append(whereParts, "UPPER(sa.store_code) >= UPPER(?)")
+		whereParts = append(whereParts, "UPPER(COALESCE(rc.code, sa.store_code, '')) >= UPPER(?)")
 		whereArgs = append(whereArgs, branchCodeFrom)
 	}
 	if branchCodeTo != "" {
-		whereParts = append(whereParts, "UPPER(sa.store_code) <= UPPER(?)")
+		whereParts = append(whereParts, "UPPER(COALESCE(rc.code, sa.store_code, '')) <= UPPER(?)")
 		whereArgs = append(whereArgs, branchCodeTo)
 	}
 	if createdFrom != "" {
@@ -303,8 +307,11 @@ func GetProductSalesStats(c *gin.Context) {
         LEFT JOIN product_category_map pcm ON pcm.product_id = p.id AND pcm.category_type = ?
         LEFT JOIN product_category_%d pc ON pc.id = pcm.category%d_id
         LEFT JOIN LATERAL (
-            SELECT short_name, name FROM retail_customers
-            WHERE code = sa.store_code AND deleted_at IS NULL LIMIT 1
+            SELECT code, short_name, name FROM retail_customers
+            WHERE deleted_at IS NULL
+              AND (code = sa.store_code OR branch_code = sa.store_code)
+            ORDER BY (CASE WHEN code = sa.store_code THEN 0 ELSE 1 END), id
+            LIMIT 1
         ) rc ON TRUE
         %s
         GROUP BY %s
