@@ -262,8 +262,6 @@ func CreateAccount(c *gin.Context) {
 		return
 	}
 
-	// 帳號變更 → 清 options bootstrap 快取(下拉拿到最新)
-	invalidateListCache("accounts")
 	resp.Success("新增成功").SetData(admin).Send()
 }
 
@@ -394,8 +392,6 @@ func UpdateAccount(c *gin.Context) {
 		return
 	}
 
-	// 帳號變更 → 清 options bootstrap 快取
-	invalidateListCache("accounts")
 	resp.Success("更新成功").Send()
 }
 
@@ -435,8 +431,6 @@ func DisableAccount(c *gin.Context) {
 	}
 
 	db.GetWrite().Model(&admin).Update("is_disabled", req.IsDisabled)
-	// 帳號狀態變更 → 清 options bootstrap 快取(下拉的 is_disabled 同步更新)
-	invalidateListCache("accounts")
 	resp.Success("更新成功").Send()
 }
 
