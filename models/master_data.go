@@ -79,6 +79,7 @@ type Currency struct {
 	Code         string         `gorm:"type:varchar(10);uniqueIndex;not null" json:"code"`
 	Name         string         `gorm:"type:varchar(50);not null" json:"name"`
 	Symbol       string         `gorm:"type:varchar(10)" json:"symbol"`
-	ExchangeRate float64        `gorm:"type:numeric(10,4);default:0" json:"exchange_rate"`
+	ExchangeRate float64        `gorm:"type:numeric(10,4);default:1" json:"exchange_rate"`
+	Extra        float64        `gorm:"type:numeric(10,2);default:0" json:"extra"` // 進貨成本公式的額外費用(運費等),公式 = price * exchange_rate + extra
 	IsActive     bool           `gorm:"default:true" json:"is_active"`
 }
