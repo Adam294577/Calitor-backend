@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 	"github.com/spf13/viper"
 	swaggerFiles "github.com/swaggo/files"
@@ -192,8 +193,10 @@ func App(HttpServer *gin.Engine) {
 	ipWhiteList := middlewares.IPWhiteList()
 	loggerMiddleware := middlewares.Logger()
 
-	// 使用 middleware（Security Headers → CORS → IP 白名單 → requestID → log → recovery）
+	// 使用 middleware（gzip → Security Headers → CORS → IP 白名單 → requestID → log → recovery）
+	// gzip 放在最前面以包覆所有 response writer；排除 MinIO 檔案代理（已是壓縮過的圖片，再壓一次純粹浪費 CPU）
 	HttpServer.Use(
+		gzip.Gzip(gzip.DefaultCompression, gzip.WithExcludedPathsRegexs([]string{"^/api/file/"})),
 		middlewares.SecurityHeaders(),
 		func(ctx *gin.Context) {
 			if middlewares.SkipMiddleware(ctx.Request.URL.Path) {
