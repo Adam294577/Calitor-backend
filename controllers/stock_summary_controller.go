@@ -201,6 +201,10 @@ func GetStockSummary(c *gin.Context) {
 			return lines[i].stockNo < lines[j].stockNo
 		})
 		for _, l := range lines {
+			// 符號規範：進貨一律正、退貨一律負，避免歷史資料正負不一造成「負負得正」
+			absQty := int(math.Abs(float64(l.qty)))
+			absAmount := math.Abs(l.amount)
+			absTax := math.Abs(l.taxAmount)
 			row := stockSummaryRow{
 				VendorID:   l.vendorID,
 				VendorName: l.vendorName,
@@ -210,18 +214,19 @@ func GetStockSummary(c *gin.Context) {
 				StockDate:  l.stockDate,
 				StockMode:  l.stockMode,
 				UnitPrice:  l.unitPrice,
-				TaxAmount:  l.taxAmount,
 			}
 			if l.stockMode == 2 {
-				row.ReturnQty = l.qty
-				row.ReturnAmount = l.amount
-				row.NetQty = -l.qty
-				row.NetAmount = -l.amount
+				row.ReturnQty = -absQty
+				row.ReturnAmount = -absAmount
+				row.NetQty = -absQty
+				row.NetAmount = -absAmount
+				row.TaxAmount = -absTax
 			} else {
-				row.StockQty = l.qty
-				row.StockAmount = l.amount
-				row.NetQty = l.qty
-				row.NetAmount = l.amount
+				row.StockQty = absQty
+				row.StockAmount = absAmount
+				row.NetQty = absQty
+				row.NetAmount = absAmount
+				row.TaxAmount = absTax
 			}
 			row.TotalAmount = row.NetAmount + row.TaxAmount
 			if groupBy == "vendor" {
@@ -264,17 +269,22 @@ func GetStockSummary(c *gin.Context) {
 				aggMap[key] = e
 				order = append(order, key)
 			}
-			per := stockSummaryRow{TaxAmount: l.taxAmount}
+			absQty := int(math.Abs(float64(l.qty)))
+			absAmount := math.Abs(l.amount)
+			absTax := math.Abs(l.taxAmount)
+			per := stockSummaryRow{}
 			if l.stockMode == 2 {
-				per.ReturnQty = l.qty
-				per.ReturnAmount = l.amount
-				per.NetQty = -l.qty
-				per.NetAmount = -l.amount
+				per.ReturnQty = -absQty
+				per.ReturnAmount = -absAmount
+				per.NetQty = -absQty
+				per.NetAmount = -absAmount
+				per.TaxAmount = -absTax
 			} else {
-				per.StockQty = l.qty
-				per.StockAmount = l.amount
-				per.NetQty = l.qty
-				per.NetAmount = l.amount
+				per.StockQty = absQty
+				per.StockAmount = absAmount
+				per.NetQty = absQty
+				per.NetAmount = absAmount
+				per.TaxAmount = absTax
 			}
 			per.TotalAmount = per.NetAmount + per.TaxAmount
 			accumulateStockRow(&e.row, &per)
