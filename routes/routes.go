@@ -180,6 +180,8 @@ func RouterRegister(route *gin.Engine) {
 
 		// 日常作業 - 廠商採購
 		adminAuth.GET("/purchases", middlewares.RequirePermission("purchases.view"), controllers.GetPurchases)
+		// 廠商採購統計（需在 :id 路由之前註冊）
+		adminAuth.GET("/purchases/summary", middlewares.RequirePermission("vendor-purchase-summary.view"), controllers.GetPurchaseSummary)
 		adminAuth.GET("/purchases/:id", middlewares.RequirePermission("purchases.view"), controllers.GetPurchase)
 		adminAuth.POST("/purchases", middlewares.RequirePermission("purchases.create"), controllers.CreatePurchase)
 		adminAuth.PUT("/purchases/:id", middlewares.RequirePermission("purchases.edit"), controllers.UpdatePurchase)
