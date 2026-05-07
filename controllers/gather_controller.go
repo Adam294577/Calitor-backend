@@ -348,7 +348,7 @@ func CreateGather(c *gin.Context) {
 	var maxNo string
 	db.GetRead().Unscoped().Model(&models.Gather{}).
 		Where("gather_no LIKE ?", noPrefix+"%").
-		Select("MAX(gather_no)").
+		Select("COALESCE(MAX(gather_no), '')").
 		Scan(&maxNo)
 
 	seq := 1

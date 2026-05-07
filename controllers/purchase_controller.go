@@ -268,7 +268,7 @@ func CreatePurchase(c *gin.Context) {
 	var maxNo string
 	db.GetRead().Unscoped().Model(&models.Purchase{}).
 		Where("purchase_no LIKE ?", prefix+"%").
-		Select("MAX(purchase_no)").
+		Select("COALESCE(MAX(purchase_no), '')").
 		Scan(&maxNo)
 
 	seq := 1

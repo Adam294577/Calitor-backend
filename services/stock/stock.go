@@ -143,7 +143,7 @@ func CreateBatch(tx *gorm.DB, payload CreateBatchPayload, recorderID int64) ([]C
 			var maxNo string
 			if err := tx.Unscoped().Model(&models.Stock{}).
 				Where("stock_no LIKE ?", noPrefix+"%").
-				Select("MAX(stock_no)").
+				Select("COALESCE(MAX(stock_no), '')").
 				Scan(&maxNo).Error; err != nil {
 				return nil, fmt.Errorf("查詢流水號失敗:%w", err)
 			}

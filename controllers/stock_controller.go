@@ -216,7 +216,7 @@ func CreateStock(c *gin.Context) {
 	var maxNo string
 	db.GetRead().Unscoped().Model(&models.Stock{}).
 		Where("stock_no LIKE ?", noPrefix+"%").
-		Select("MAX(stock_no)").
+		Select("COALESCE(MAX(stock_no), '')").
 		Scan(&maxNo)
 
 	seq := 1

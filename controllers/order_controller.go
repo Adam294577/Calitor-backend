@@ -220,7 +220,7 @@ func CreateOrder(c *gin.Context) {
 	var maxNo string
 	db.GetRead().Unscoped().Model(&models.Order{}).
 		Where("order_no LIKE ?", prefix+"%").
-		Select("MAX(order_no)").
+		Select("COALESCE(MAX(order_no), '')").
 		Scan(&maxNo)
 
 	seq := 1
