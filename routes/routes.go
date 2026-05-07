@@ -208,6 +208,8 @@ func RouterRegister(route *gin.Engine) {
 		// 日常作業 - 客戶訂貨
 		adminAuth.GET("/orders", middlewares.RequirePermission("orders.view"), controllers.GetOrders)
 		adminAuth.POST("/orders", middlewares.RequirePermission("orders.create"), controllers.CreateOrder)
+		// 客戶訂貨統計（需在 :id 路由之前註冊）
+		adminAuth.GET("/orders/summary", middlewares.RequirePermission("customer-order-summary.view"), controllers.GetOrderSummary)
 		// 訂貨未交統計（需在 :id 路由之前註冊）
 		adminAuth.GET("/orders/outstanding", middlewares.RequirePermission("order-outstanding.view"), controllers.GetOrderOutstanding)
 		// 訂貨單搜尋（供出貨單選擇關聯訂貨）
