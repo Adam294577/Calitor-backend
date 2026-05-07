@@ -32,6 +32,9 @@ func GetCustomers(c *gin.Context) {
 	if locId := c.Query("location_id"); locId != "" {
 		query = query.Where("location_id = ?", locId)
 	}
+	if v := c.Query("is_visible"); v == "true" || v == "false" {
+		query = query.Where("is_visible = ?", v == "true")
+	}
 	paged, total := Paginate(c, query, &models.RetailCustomer{})
 	paged.Find(&items)
 	setListCache(c, items, total)
