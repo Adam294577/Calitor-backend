@@ -131,10 +131,36 @@ func GetOrder(c *gin.Context) {
 		shipmentNos[si.OrderItemID] = append(shipmentNos[si.OrderItemID], si.ShipmentNo)
 	}
 
+	// 此客戶對所有型號的跨單總未交量（排除本單，前端 form 量會自行疊加）
+	customerOutstanding := CustomerProductOutstandingMap(db.GetRead(), item.CustomerID, item.ID)
+
 	resp.Success("成功").SetData(map[string]interface{}{
-		"order":        item,
-		"shipped":      shipped,
-		"shipment_nos": shipmentNos,
+		"order":                item,
+		"shipped":              shipped,
+		"shipment_nos":         shipmentNos,
+		"customer_outstanding": customerOutstanding,
+	}).Send()
+}
+
+// GetCustomerOrderOutstandingMap 取得指定客戶的型號跨單總未交量 map
+// 用途：新增訂貨單 / 切換客戶時即時抓取
+// 可選 query: exclude_order_id=N → 排除某張訂貨單（編輯模式自身）
+func GetCustomerOrderOutstandingMap(c *gin.Context) {
+	resp := response.New(c)
+	customerID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		resp.Fail(http.StatusBadRequest, "無效的客戶 ID").Send()
+		return
+	}
+
+	excludeOrderID, _ := strconv.ParseInt(c.Query("exclude_order_id"), 10, 64)
+
+	db := models.PostgresNew()
+	defer db.Close()
+
+	m := CustomerProductOutstandingMap(db.GetRead(), customerID, excludeOrderID)
+	resp.Success("成功").SetData(map[string]interface{}{
+		"customer_outstanding": m,
 	}).Send()
 }
 
@@ -551,6 +577,63 @@ func SearchOrders(c *gin.Context) {
 		"orders":  orders,
 		"shipped": shipped,
 	}).Send()
+}
+
+// CustomerProductOutstandingMap 查詢指定客戶跨所有未結清訂貨單，依
+// (product_id, size_option_id) 加總的「總未交量」。
+//   - 排除 cancel_flag IN (2, 3)（停貨/取消，與 GetOrderOutstanding 一致）
+//   - 排除 orders.delivery_status >= 2（已交齊）
+//   - excludeOrderID > 0 時排除該訂貨單（編輯模式排除自己，避免與前端 form 量重複計算）
+//   - 回傳 map["productID-sizeOptionID"] = outstandingQty（>0）
+func CustomerProductOutstandingMap(db *gorm.DB, customerID int64, excludeOrderID int64) map[string]int {
+	result := map[string]int{}
+	if customerID <= 0 {
+		return result
+	}
+
+	type row struct {
+		OrderItemID  int64
+		ProductID    int64
+		SizeOptionID int64
+		Qty          int
+	}
+	var rows []row
+	q := db.Model(&models.OrderItemSize{}).
+		Select("order_item_sizes.order_item_id, order_items.product_id, order_item_sizes.size_option_id, order_item_sizes.qty").
+		Joins("JOIN order_items ON order_items.id = order_item_sizes.order_item_id").
+		Joins("JOIN orders ON orders.id = order_items.order_id AND orders.deleted_at IS NULL").
+		Where("orders.customer_id = ?", customerID).
+		Where("orders.delivery_status < 2").
+		Where("order_items.cancel_flag NOT IN (2, 3)")
+	if excludeOrderID > 0 {
+		q = q.Where("orders.id <> ?", excludeOrderID)
+	}
+	q.Scan(&rows)
+
+	if len(rows) == 0 {
+		return result
+	}
+
+	idSet := map[int64]bool{}
+	for _, r := range rows {
+		idSet[r.OrderItemID] = true
+	}
+	itemIDs := make([]int64, 0, len(idSet))
+	for id := range idSet {
+		itemIDs = append(itemIDs, id)
+	}
+	shipped := ShippedQtyMap(db, itemIDs)
+
+	for _, r := range rows {
+		shipKey := fmt.Sprintf("%d-%d", r.OrderItemID, r.SizeOptionID)
+		outstanding := r.Qty - shipped[shipKey]
+		if outstanding <= 0 {
+			continue
+		}
+		aggKey := fmt.Sprintf("%d-%d", r.ProductID, r.SizeOptionID)
+		result[aggKey] += outstanding
+	}
+	return result
 }
 
 // ShippedQtyMap 查詢指定 orderItemIDs 的已出貨數量

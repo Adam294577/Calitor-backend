@@ -114,10 +114,93 @@ func GetPurchase(c *gin.Context) {
 		stockNos[si.PurchaseItemID] = append(stockNos[si.PurchaseItemID], si.StockNo)
 	}
 
+	// 此廠商對所有型號的跨單總未交量（排除本單，前端 form 量會自行疊加）
+	vendorOutstanding := VendorProductOutstandingMap(db.GetRead(), item.VendorID, item.ID)
+
 	resp.Success("成功").SetData(map[string]interface{}{
-		"purchase":  item,
-		"delivered": delivered,
-		"stock_nos": stockNos,
+		"purchase":           item,
+		"delivered":          delivered,
+		"stock_nos":          stockNos,
+		"vendor_outstanding": vendorOutstanding,
+	}).Send()
+}
+
+// VendorProductOutstandingMap 查詢指定廠商跨所有未結清採購單，依
+// (product_id, size_option_id) 加總的「總未交量」。
+//   - 排除 cancel_flag IN (2, 3)（停交/取消，與 GetPurchaseOutstanding 一致）
+//   - 排除 purchases.delivery_status >= 2（已交齊）
+//   - excludePurchaseID > 0 時排除該採購單（編輯模式排除自己，避免與前端 form 量重複計算）
+//   - 回傳 map["productID-sizeOptionID"] = outstandingQty（>0）
+func VendorProductOutstandingMap(db *gorm.DB, vendorID int64, excludePurchaseID int64) map[string]int {
+	result := map[string]int{}
+	if vendorID <= 0 {
+		return result
+	}
+
+	type row struct {
+		PurchaseItemID int64
+		ProductID      int64
+		SizeOptionID   int64
+		Qty            int
+	}
+	var rows []row
+	q := db.Model(&models.PurchaseItemSize{}).
+		Select("purchase_item_sizes.purchase_item_id, purchase_items.product_id, purchase_item_sizes.size_option_id, purchase_item_sizes.qty").
+		Joins("JOIN purchase_items ON purchase_items.id = purchase_item_sizes.purchase_item_id").
+		Joins("JOIN purchases ON purchases.id = purchase_items.purchase_id AND purchases.deleted_at IS NULL").
+		Where("purchases.vendor_id = ?", vendorID).
+		Where("purchases.delivery_status < 2").
+		Where("purchase_items.cancel_flag NOT IN (2, 3)")
+	if excludePurchaseID > 0 {
+		q = q.Where("purchases.id <> ?", excludePurchaseID)
+	}
+	q.Scan(&rows)
+
+	if len(rows) == 0 {
+		return result
+	}
+
+	idSet := map[int64]bool{}
+	for _, r := range rows {
+		idSet[r.PurchaseItemID] = true
+	}
+	itemIDs := make([]int64, 0, len(idSet))
+	for id := range idSet {
+		itemIDs = append(itemIDs, id)
+	}
+	deliveredMap := delivery.DeliveredQtyMap(db, itemIDs)
+
+	for _, r := range rows {
+		delKey := fmt.Sprintf("%d-%d", r.PurchaseItemID, r.SizeOptionID)
+		outstanding := r.Qty - deliveredMap[delKey]
+		if outstanding <= 0 {
+			continue
+		}
+		aggKey := fmt.Sprintf("%d-%d", r.ProductID, r.SizeOptionID)
+		result[aggKey] += outstanding
+	}
+	return result
+}
+
+// GetVendorPurchaseOutstandingMap 取得指定廠商的型號跨單總未交量 map
+// 用途：新增採購單 / 切換廠商時即時抓取
+// 可選 query: exclude_purchase_id=N → 排除某張採購單（編輯模式自身）
+func GetVendorPurchaseOutstandingMap(c *gin.Context) {
+	resp := response.New(c)
+	vendorID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		resp.Fail(http.StatusBadRequest, "無效的廠商 ID").Send()
+		return
+	}
+
+	excludePurchaseID, _ := strconv.ParseInt(c.Query("exclude_purchase_id"), 10, 64)
+
+	db := models.PostgresNew()
+	defer db.Close()
+
+	m := VendorProductOutstandingMap(db.GetRead(), vendorID, excludePurchaseID)
+	resp.Success("成功").SetData(map[string]interface{}{
+		"vendor_outstanding": m,
 	}).Send()
 }
 
