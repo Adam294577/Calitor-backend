@@ -26,13 +26,13 @@ type FirewallIP struct {
 
 // SyncEnvFirewallIPs 啟動時把 SERVER_SECURITY_ALLOWEDOFFICEIP 環境變數同步到 DB 表
 //
-// 設計原則：DB 是 source of truth；env 只是 seed,只新增不破壞既有資料
+// 設計原則：env 是 source=env 紀錄的 source of truth；manual 紀錄完全不受影響
 //   - env 內的 IP：DB 沒有就建立 (source=env)，被 soft delete 過就復原
 //   - env 內的 IP 已存在但 source=manual：保持 manual,不改寫(避免管理者手動加的 IP 被 sync 接管後又被誤刪)
-//   - source=env 但已不在 env 的紀錄：停用 (is_active=false) 不刪除,管理者可在 UI 重新啟用或刪除
+//   - source=env 但已不在 env 的紀錄：直接從 DB 硬刪除(避免 UI 留下一堆停用的舊資料)
 //   - manual 紀錄完全不受 sync 影響
 //
-// env 為空時直接 noop,絕不對 DB 動手腳(避免 env 因部署 bug 暫時消失就把白名單全停掉)
+// env 為空時直接 noop,絕不對 DB 動手腳(避免 env 因部署 bug 暫時消失就把白名單全砍掉)
 func SyncEnvFirewallIPs(db *DBManager) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -93,24 +93,24 @@ func SyncEnvFirewallIPs(db *DBManager) {
 		alreadyEnv++
 	}
 
-	// env 列表不再包含的 source=env 紀錄:停用而非刪除,讓管理者可從 UI 復原
+	// env 列表不再包含的 source=env 紀錄:直接 hard delete(含舊有被停用 / 軟刪除的歷史資料一併清掉)
 	var stale []FirewallIP
-	if findErr := db.GetRead().Where("source = ? AND is_active = ?", "env", true).Find(&stale).Error; findErr != nil {
+	if findErr := db.GetRead().Unscoped().Where("source = ?", "env").Find(&stale).Error; findErr != nil {
 		log.Error("SyncEnvFirewallIPs: 掃描過期 env IP 失敗: %s", findErr.Error())
 	}
-	disabled := 0
+	deleted := 0
 	for _, r := range stale {
 		if envSet[r.IP] {
 			continue
 		}
-		if err := db.GetWrite().Model(&r).Update("is_active", false).Error; err != nil {
-			log.Error("SyncEnvFirewallIPs: 停用過期 env IP %s 失敗: %s", r.IP, err.Error())
+		if err := db.GetWrite().Unscoped().Delete(&FirewallIP{}, r.ID).Error; err != nil {
+			log.Error("SyncEnvFirewallIPs: 刪除過期 env IP %s 失敗: %s", r.IP, err.Error())
 			continue
 		}
-		disabled++
-		log.Warn("SyncEnvFirewallIPs: env 已不含 %s,將該紀錄停用(未刪除,UI 可復原)", r.IP)
+		deleted++
+		log.Warn("SyncEnvFirewallIPs: env 已不含 %s,該紀錄已從 DB 硬刪除", r.IP)
 	}
 
-	log.Info("SyncEnvFirewallIPs: env=%d 筆 | 新增=%d 復原=%d 已是env=%d 略過manual=%d 停用過期=%d",
-		len(envSet), created, restored, alreadyEnv, skippedManual, disabled)
+	log.Info("SyncEnvFirewallIPs: env=%d 筆 | 新增=%d 復原=%d 已是env=%d 略過manual=%d 硬刪過期=%d",
+		len(envSet), created, restored, alreadyEnv, skippedManual, deleted)
 }
