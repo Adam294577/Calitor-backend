@@ -180,11 +180,15 @@ func RouterRegister(route *gin.Engine) {
 
 		// 日常作業 - 廠商採購
 		adminAuth.GET("/purchases", middlewares.RequirePermission("purchases.view"), controllers.GetPurchases)
+		// 廠商採購統計（需在 :id 路由之前註冊）
+		adminAuth.GET("/purchases/summary", middlewares.RequirePermission("vendor-purchase-summary.view"), controllers.GetPurchaseSummary)
 		adminAuth.GET("/purchases/:id", middlewares.RequirePermission("purchases.view"), controllers.GetPurchase)
 		adminAuth.POST("/purchases", middlewares.RequirePermission("purchases.create"), controllers.CreatePurchase)
 		adminAuth.PUT("/purchases/:id", middlewares.RequirePermission("purchases.edit"), controllers.UpdatePurchase)
 		adminAuth.DELETE("/purchases/:id", middlewares.RequirePermission("purchases.delete"), controllers.DeletePurchase)
 		adminAuth.PUT("/purchases/:id/stop", middlewares.RequirePermission("purchases.edit"), controllers.StopPurchase)
+			// 廠商跨單採購未交量 map（供 SizeQtyTable 顯示「採購未交量」）
+			adminAuth.GET("/vendors/:id/purchase-outstanding-map", middlewares.RequirePermission("purchases.view"), controllers.GetVendorPurchaseOutstandingMap)
 
 		// 採購單搜尋（供進貨單選擇關聯採購）
 		adminAuth.GET("/purchases/search", middlewares.RequirePermission("stocks.view"), controllers.SearchPurchases)
@@ -206,6 +210,8 @@ func RouterRegister(route *gin.Engine) {
 		// 日常作業 - 客戶訂貨
 		adminAuth.GET("/orders", middlewares.RequirePermission("orders.view"), controllers.GetOrders)
 		adminAuth.POST("/orders", middlewares.RequirePermission("orders.create"), controllers.CreateOrder)
+		// 客戶訂貨統計（需在 :id 路由之前註冊）
+		adminAuth.GET("/orders/summary", middlewares.RequirePermission("customer-order-summary.view"), controllers.GetOrderSummary)
 		// 訂貨未交統計（需在 :id 路由之前註冊）
 		adminAuth.GET("/orders/outstanding", middlewares.RequirePermission("order-outstanding.view"), controllers.GetOrderOutstanding)
 		// 訂貨單搜尋（供出貨單選擇關聯訂貨）
@@ -216,6 +222,8 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.PUT("/orders/:id", middlewares.RequirePermission("orders.edit"), controllers.UpdateOrder)
 		adminAuth.DELETE("/orders/:id", middlewares.RequirePermission("orders.delete"), controllers.DeleteOrder)
 		adminAuth.PUT("/orders/:id/stop", middlewares.RequirePermission("orders.edit"), controllers.StopOrder)
+			// 客戶跨單訂貨未交量 map（供 SizeQtyTable 顯示「訂貨未交量」）
+			adminAuth.GET("/customers/:id/order-outstanding-map", middlewares.RequirePermission("orders.view"), controllers.GetCustomerOrderOutstandingMap)
 
 		// 日常作業 - 客戶出貨
 		adminAuth.GET("/shipments", middlewares.RequirePermission("shipments.view"), controllers.GetShipments)
@@ -228,6 +236,8 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.GET("/shipments/credit/:customer_id", middlewares.RequirePermission("shipments.view"), controllers.GetCustomerCredit)
 		adminAuth.POST("/shipments/barcode-parse", middlewares.RequirePermission("shipments.create"), controllers.BarcodeParse)
 		adminAuth.POST("/shipments/batch", middlewares.RequirePermission("shipments.create"), controllers.CreateShipmentBatch)
+		// 客戶 × 型號 歷史淨出貨量批次查詢(供出貨單「退貨」模式顯示「歷史出貨量」)
+		adminAuth.POST("/shipments/history-qty-batch", middlewares.RequirePermission("shipments.view"), controllers.GetShipmentHistoryQtyBatch)
 
 		// 庫存管理 - 庫存查詢
 		adminAuth.GET("/inventory", middlewares.RequirePermission("inventory-query.view"), controllers.GetInventory)

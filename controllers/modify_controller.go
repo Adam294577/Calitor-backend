@@ -126,7 +126,7 @@ func CreateModify(c *gin.Context) {
 	var maxNo string
 	db.GetRead().Unscoped().Model(&models.Modify{}).
 		Where("modify_no LIKE ?", prefix+"%").
-		Select("MAX(modify_no)").
+		Select("COALESCE(MAX(modify_no), '')").
 		Scan(&maxNo)
 
 	seq := 1

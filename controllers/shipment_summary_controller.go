@@ -15,6 +15,7 @@ import (
 // shipmentSummaryRow 客戶出貨統計列
 type shipmentSummaryRow struct {
 	GroupLabel   string `json:"group_label"`
+	CustomerID   int64  `json:"customer_id,omitempty"`
 	CustomerCode string `json:"customer_code,omitempty"`
 	CustomerName string `json:"customer_name,omitempty"`
 	ModelCode    string `json:"model_code,omitempty"`
@@ -159,6 +160,7 @@ func GetShipmentSummary(c *gin.Context) {
 		shipmentNo   string
 		shipmentDate string
 		shipmentMode int
+		customerID   int64
 		customerCode string
 		customerName string
 		modelCode    string
@@ -197,6 +199,7 @@ func GetShipmentSummary(c *gin.Context) {
 				shipmentNo:   s.ShipmentNo,
 				shipmentDate: s.ShipmentDate,
 				shipmentMode: s.ShipmentMode,
+				customerID:   s.CustomerID,
 				customerCode: customerCode,
 				customerName: customerName,
 				modelCode:    item.Product.ModelCode,
@@ -223,7 +226,13 @@ func GetShipmentSummary(c *gin.Context) {
 			return lines[i].shipmentNo < lines[j].shipmentNo
 		})
 		for _, l := range lines {
+			// 符號規範：出貨一律正、退貨一律負，避免歷史資料正負不一造成「負負得正」
+			absQty := int(math.Abs(float64(l.qty)))
+			absAmount := math.Abs(l.amount)
+			absCost := math.Abs(l.cost)
+			absTax := math.Abs(l.taxAmount)
 			row := shipmentSummaryRow{
+				CustomerID:   l.customerID,
 				CustomerCode: l.customerCode,
 				CustomerName: l.customerName,
 				ModelCode:    l.modelCode,
@@ -233,19 +242,21 @@ func GetShipmentSummary(c *gin.Context) {
 				ShipmentMode: l.shipmentMode,
 				UnitPrice:    l.unitPrice,
 				Discount:     l.discount,
-				TaxAmount:    l.taxAmount,
-				Cost:         l.cost,
 			}
 			if l.shipmentMode == 4 {
-				row.ReturnQty = l.qty
-				row.ReturnAmount = l.amount
-				row.NetQty = -l.qty
-				row.NetAmount = -l.amount
+				row.ReturnQty = -absQty
+				row.ReturnAmount = -absAmount
+				row.NetQty = -absQty
+				row.NetAmount = -absAmount
+				row.Cost = -absCost
+				row.TaxAmount = -absTax
 			} else {
-				row.ShipQty = l.qty
-				row.ShipAmount = l.amount
-				row.NetQty = l.qty
-				row.NetAmount = l.amount
+				row.ShipQty = absQty
+				row.ShipAmount = absAmount
+				row.NetQty = absQty
+				row.NetAmount = absAmount
+				row.Cost = absCost
+				row.TaxAmount = absTax
 			}
 			row.TotalAmount = row.NetAmount + row.TaxAmount
 			row.Gross = row.NetAmount - row.Cost
@@ -262,6 +273,7 @@ func GetShipmentSummary(c *gin.Context) {
 	} else {
 		type aggEntry struct {
 			groupLabel   string
+			customerID   int64
 			customerCode string
 			customerName string
 			modelCode    string
@@ -285,6 +297,7 @@ func GetShipmentSummary(c *gin.Context) {
 			if !ok {
 				e = &aggEntry{
 					groupLabel:   label,
+					customerID:   l.customerID,
 					customerCode: l.customerCode,
 					customerName: l.customerName,
 					modelCode:    l.modelCode,
@@ -294,17 +307,26 @@ func GetShipmentSummary(c *gin.Context) {
 				order = append(order, key)
 			}
 			entry = e
-			per := shipmentSummaryRow{Cost: l.cost, TaxAmount: l.taxAmount}
+			// 符號規範：出貨一律正、退貨一律負
+			absQty := int(math.Abs(float64(l.qty)))
+			absAmount := math.Abs(l.amount)
+			absCost := math.Abs(l.cost)
+			absTax := math.Abs(l.taxAmount)
+			per := shipmentSummaryRow{}
 			if l.shipmentMode == 4 {
-				per.ReturnQty = l.qty
-				per.ReturnAmount = l.amount
-				per.NetQty = -l.qty
-				per.NetAmount = -l.amount
+				per.ReturnQty = -absQty
+				per.ReturnAmount = -absAmount
+				per.NetQty = -absQty
+				per.NetAmount = -absAmount
+				per.Cost = -absCost
+				per.TaxAmount = -absTax
 			} else {
-				per.ShipQty = l.qty
-				per.ShipAmount = l.amount
-				per.NetQty = l.qty
-				per.NetAmount = l.amount
+				per.ShipQty = absQty
+				per.ShipAmount = absAmount
+				per.NetQty = absQty
+				per.NetAmount = absAmount
+				per.Cost = absCost
+				per.TaxAmount = absTax
 			}
 			per.TotalAmount = per.NetAmount + per.TaxAmount
 			accumulateRow(&entry.row, &per)
@@ -321,6 +343,7 @@ func GetShipmentSummary(c *gin.Context) {
 			e.row.Gross = e.row.NetAmount - e.row.Cost
 			e.row.GrossRate = grossRate(e.row.Gross, e.row.NetAmount)
 			if groupBy == "customer" {
+				e.row.CustomerID = e.customerID
 				e.row.CustomerCode = e.customerCode
 				e.row.CustomerName = e.customerName
 			} else {

@@ -116,9 +116,12 @@ func buildDSN(config *DBConfig) string {
 }
 
 // configureConnectionPool 設定連接池參數
+// 前端建檔頁面同時打 28+ 個 page_size=9999 主檔下拉 API，pool 太小會排隊/超時，
+// 引發 partial-failure（部分 query 拿到 nil 卻被寫進 cache，stale 10 分鐘）。
+// read pool 開大、write pool 適中（寫入請求量遠少於讀取）。
 func configureConnectionPool(sqlDB *sql.DB) {
-	sqlDB.SetMaxOpenConns(20)
-	sqlDB.SetMaxIdleConns(10)
+	sqlDB.SetMaxOpenConns(40)
+	sqlDB.SetMaxIdleConns(15)
 	sqlDB.SetConnMaxLifetime(time.Hour)
 }
 

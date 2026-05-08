@@ -196,7 +196,7 @@ func CreateRetailSell(c *gin.Context) {
 	var maxNo string
 	db.GetRead().Unscoped().Model(&models.RetailSell{}).
 		Where("sell_no LIKE ?", noPrefix+"%").
-		Select("MAX(sell_no)").
+		Select("COALESCE(MAX(sell_no), '')").
 		Scan(&maxNo)
 
 	seq := 1
