@@ -1330,3 +1330,73 @@ func BarcodeParse(c *gin.Context) {
 		"overdue": overdue,
 	}).Send()
 }
+
+// GetShipmentHistoryQtyBatch 批次取得「客戶 × 多型號」歷史淨出貨量(出貨絕對值 - 退貨絕對值),依尺寸分布。
+// 給 SizeQtyTable 出貨單退貨模式顯示「歷史出貨量」用,避免 N 次 API。
+// Body: { customer_id: int64, product_ids: int64[], exclude_shipment_id?: int64 }
+// Response: { history_map: { "<product_id>": { "<size_option_id>": <net_qty> } } }
+//
+// 淨值算法刻意分兩段絕對值再相減,避免 DB 若有歷史污染的負 qty 造成「負負得正」。
+func GetShipmentHistoryQtyBatch(c *gin.Context) {
+	resp := response.New(c)
+
+	var req struct {
+		CustomerID        int64   `json:"customer_id" binding:"required"`
+		ProductIDs        []int64 `json:"product_ids" binding:"required"`
+		ExcludeShipmentID int64   `json:"exclude_shipment_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		resp.Fail(http.StatusBadRequest, "資料格式錯誤").Send()
+		return
+	}
+	if len(req.ProductIDs) == 0 {
+		resp.Success("成功").SetData(map[string]interface{}{
+			"history_map": map[string]map[string]int{},
+		}).Send()
+		return
+	}
+
+	db := models.PostgresNew()
+	defer db.Close()
+
+	type historyRow struct {
+		ProductID    int64
+		SizeOptionID int64
+		NetQty       int
+	}
+	var rows []historyRow
+	q := db.GetRead().Table("shipment_item_sizes AS sis").
+		Select(`si.product_id AS product_id,
+                sis.size_option_id AS size_option_id,
+                COALESCE(SUM(CASE WHEN s.shipment_mode = 3 THEN ABS(sis.qty) ELSE 0 END), 0)
+              - COALESCE(SUM(CASE WHEN s.shipment_mode = 4 THEN ABS(sis.qty) ELSE 0 END), 0) AS net_qty`).
+		Joins("JOIN shipment_items si ON si.id = sis.shipment_item_id").
+		Joins("JOIN shipments s ON s.id = si.shipment_id AND s.deleted_at IS NULL").
+		Where("s.customer_id = ? AND si.product_id IN ? AND s.shipment_mode IN (3, 4)",
+			req.CustomerID, req.ProductIDs).
+		Group("si.product_id, sis.size_option_id")
+	if req.ExcludeShipmentID > 0 {
+		q = q.Where("s.id <> ?", req.ExcludeShipmentID)
+	}
+	if err := q.Scan(&rows).Error; err != nil {
+		resp.Panic(err).Send()
+		return
+	}
+
+	historyMap := map[string]map[string]int{}
+	for _, r := range rows {
+		if r.NetQty == 0 {
+			continue
+		}
+		pid := strconv.FormatInt(r.ProductID, 10)
+		sid := strconv.FormatInt(r.SizeOptionID, 10)
+		if historyMap[pid] == nil {
+			historyMap[pid] = map[string]int{}
+		}
+		historyMap[pid][sid] = r.NetQty
+	}
+
+	resp.Success("成功").SetData(map[string]interface{}{
+		"history_map": historyMap,
+	}).Send()
+}

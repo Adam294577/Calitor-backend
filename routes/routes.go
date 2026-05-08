@@ -236,6 +236,8 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.GET("/shipments/credit/:customer_id", middlewares.RequirePermission("shipments.view"), controllers.GetCustomerCredit)
 		adminAuth.POST("/shipments/barcode-parse", middlewares.RequirePermission("shipments.create"), controllers.BarcodeParse)
 		adminAuth.POST("/shipments/batch", middlewares.RequirePermission("shipments.create"), controllers.CreateShipmentBatch)
+		// 客戶 × 型號 歷史淨出貨量批次查詢(供出貨單「退貨」模式顯示「歷史出貨量」)
+		adminAuth.POST("/shipments/history-qty-batch", middlewares.RequirePermission("shipments.view"), controllers.GetShipmentHistoryQtyBatch)
 
 		// 庫存管理 - 庫存查詢
 		adminAuth.GET("/inventory", middlewares.RequirePermission("inventory-query.view"), controllers.GetInventory)
