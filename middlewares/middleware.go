@@ -88,7 +88,15 @@ func IPWhiteList() gin.HandlerFunc {
 			}
 		}
 
-		log.Warn("IPWhiteList: 拒絕來自 %s 的請求", clientIP)
+		log.Warn(
+			"IPWhiteList: 拒絕來自 %s 的請求 | CF-Connecting-IP=[%s] X-Forwarded-For=[%s] X-Real-IP=[%s] RemoteAddr=[%s] Host=[%s]",
+			clientIP,
+			ctx.GetHeader("CF-Connecting-IP"),
+			ctx.GetHeader("X-Forwarded-For"),
+			ctx.GetHeader("X-Real-IP"),
+			ctx.Request.RemoteAddr,
+			ctx.Request.Host,
+		)
 		resp.Fail(http.StatusForbidden, "Forbidden").Send()
 		ctx.Abort()
 	}
