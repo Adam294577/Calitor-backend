@@ -127,7 +127,11 @@ func GetRetailSell(c *gin.Context) {
 		return
 	}
 
-	resp.Success("成功").SetData(item).Send()
+	// 零售銷貨單無下游關聯，永遠允許切換客戶／販售庫點
+	resp.Success("成功").SetData(map[string]interface{}{
+		"retail_sell":         item,
+		"can_change_customer": true,
+	}).Send()
 }
 
 // CreateRetailSell 新增零售銷售單

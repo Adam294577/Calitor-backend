@@ -134,12 +134,28 @@ func GetOrder(c *gin.Context) {
 	// 此客戶對所有型號的跨單總未交量（排除本單，前端 form 量會自行疊加）
 	customerOutstanding := CustomerProductOutstandingMap(db.GetRead(), item.CustomerID, item.ID)
 
+	// can_change_customer：本單尚未被任何出貨單引用時才允許切換客戶／訂貨庫點
+	canChangeCustomer := !orderHasShipmentLink(db.GetRead(), item.ID)
+
 	resp.Success("成功").SetData(map[string]interface{}{
 		"order":                item,
 		"shipped":              shipped,
 		"shipment_nos":         shipmentNos,
 		"customer_outstanding": customerOutstanding,
+		"can_change_customer":  canChangeCustomer,
 	}).Send()
+}
+
+// orderHasShipmentLink 判斷某訂貨單是否已被任何（未刪除的）出貨單引用，
+// 是放寬「編輯時切換客戶」的鎖：一旦有出貨紀錄就不允許切換源頭客戶／庫點。
+func orderHasShipmentLink(db *gorm.DB, orderID int64) bool {
+	var count int64
+	db.Model(&models.ShipmentItem{}).
+		Joins("JOIN order_items ON order_items.id = shipment_items.order_item_id").
+		Joins("JOIN shipments ON shipments.id = shipment_items.shipment_id AND shipments.deleted_at IS NULL").
+		Where("order_items.order_id = ?", orderID).
+		Count(&count)
+	return count > 0
 }
 
 // GetCustomerOrderOutstandingMap 取得指定客戶的型號跨單總未交量 map
@@ -372,6 +388,16 @@ func UpdateOrder(c *gin.Context) {
 		}
 	}
 
+	// 變更客戶／訂貨庫點時，本單必須尚未被任何出貨單引用
+	customerChanged := req.CustomerID != 0 && req.CustomerID != existing.CustomerID
+	storeChanged := req.OrderStore != existing.OrderStore
+	if customerChanged || storeChanged {
+		if orderHasShipmentLink(db.GetRead(), id) {
+			resp.Fail(http.StatusBadRequest, "本單已有出貨紀錄，無法更換客戶／訂貨庫點").Send()
+			return
+		}
+	}
+
 	// 查出已停貨的舊明細（cancel_flag >= 2），保護不被修改
 	var stoppedItems []models.OrderItem
 	db.GetRead().Where("order_id = ? AND cancel_flag >= 2", id).
@@ -429,6 +455,8 @@ func UpdateOrder(c *gin.Context) {
 
 		updates := map[string]interface{}{
 			"order_date":      req.OrderDate,
+			"customer_id":     req.CustomerID,
+			"order_store":     req.OrderStore,
 			"fill_person_id":  req.FillPersonID,
 			"salesman_id":     req.SalesmanID,
 			"recorder_id":     recorderID,

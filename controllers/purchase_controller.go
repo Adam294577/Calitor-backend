@@ -117,12 +117,28 @@ func GetPurchase(c *gin.Context) {
 	// 此廠商對所有型號的跨單總未交量（排除本單，前端 form 量會自行疊加）
 	vendorOutstanding := VendorProductOutstandingMap(db.GetRead(), item.VendorID, item.ID)
 
+	// can_change_party：本單尚未被任何進貨單引用時才允許切換採購庫點／廠商
+	canChangeParty := !purchaseHasStockLink(db.GetRead(), item.ID)
+
 	resp.Success("成功").SetData(map[string]interface{}{
 		"purchase":           item,
 		"delivered":          delivered,
 		"stock_nos":          stockNos,
 		"vendor_outstanding": vendorOutstanding,
+		"can_change_party":   canChangeParty,
 	}).Send()
+}
+
+// purchaseHasStockLink 判斷某採購單是否已被任何（未刪除的）進貨單引用，
+// 是放寬「編輯時切換廠商／庫點」的鎖：一旦有進貨紀錄就不允許更換源頭。
+func purchaseHasStockLink(db *gorm.DB, purchaseID int64) bool {
+	var count int64
+	db.Model(&models.StockItem{}).
+		Joins("JOIN purchase_items ON purchase_items.id = stock_items.purchase_item_id").
+		Joins("JOIN stocks ON stocks.id = stock_items.stock_id AND stocks.deleted_at IS NULL").
+		Where("purchase_items.purchase_id = ?", purchaseID).
+		Count(&count)
+	return count > 0
 }
 
 // VendorProductOutstandingMap 查詢指定廠商跨所有未結清採購單，依
@@ -418,6 +434,16 @@ func UpdatePurchase(c *gin.Context) {
 	if req.CustomerID != 0 {
 		if _, verr := EnsureCustomerVisible(db.GetRead(), req.CustomerID); verr != nil {
 			resp.Fail(http.StatusBadRequest, ErrMsgCustomerNotVisible).Send()
+			return
+		}
+	}
+
+	// 變更採購庫點／廠商時，本單必須尚未被任何進貨單引用
+	customerChanged := req.CustomerID != 0 && req.CustomerID != existing.CustomerID
+	vendorChanged := req.VendorID != 0 && req.VendorID != existing.VendorID
+	if customerChanged || vendorChanged {
+		if purchaseHasStockLink(db.GetRead(), id) {
+			resp.Fail(http.StatusBadRequest, "本單已有進貨紀錄，無法更換採購庫點／廠商").Send()
 			return
 		}
 	}

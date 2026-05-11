@@ -172,12 +172,27 @@ func GetShipment(c *gin.Context) {
 		Scan(&bal)
 	outstanding := bal.TotalDeal - bal.TotalCharge
 
+	// can_change_customer：尚未對帳收款且沒有任何明細關聯訂貨單時才允許切換
+	// 已關聯訂貨單時若放開切換會讓 ShipmentItem.OrderItemID 指向別客戶的 OrderItem，導致訂貨單／出貨單對帳錯亂
+	canChangeCustomer := item.ChargeAmount <= 0 && !shipmentHasOrderLink(db.GetRead(), item.ID)
+
 	resp.Success("成功").SetData(map[string]interface{}{
-		"shipment":     item,
-		"order_no_map": orderNoMap,
-		"outstanding":  outstanding,
-		"credit_limit": customer.CreditLimit,
+		"shipment":            item,
+		"order_no_map":        orderNoMap,
+		"outstanding":         outstanding,
+		"credit_limit":        customer.CreditLimit,
+		"can_change_customer": canChangeCustomer,
 	}).Send()
+}
+
+// shipmentHasOrderLink 判斷出貨單是否有任何明細掛了訂貨單關聯。
+// 用於放寬「切換客戶」時的鎖：一旦有 order_item_id 就不能改客戶／庫點。
+func shipmentHasOrderLink(db *gorm.DB, shipmentID int64) bool {
+	var count int64
+	db.Model(&models.ShipmentItem{}).
+		Where("shipment_id = ? AND order_item_id IS NOT NULL", shipmentID).
+		Count(&count)
+	return count > 0
 }
 
 // CreateShipment 新增客戶出貨單
@@ -550,6 +565,20 @@ func UpdateShipment(c *gin.Context) {
 	if req.CustomerID != 0 {
 		if _, verr := EnsureCustomerVisible(db.GetRead(), req.CustomerID); verr != nil {
 			resp.Fail(http.StatusBadRequest, ErrMsgCustomerNotVisible).Send()
+			return
+		}
+	}
+
+	// 變更客戶／出貨庫點時，本單必須尚未對帳收款且沒有訂貨單關聯
+	customerChanged := req.CustomerID != 0 && req.CustomerID != existing.CustomerID
+	storeChanged := req.ShipStore != existing.ShipStore
+	if customerChanged || storeChanged {
+		if existing.ChargeAmount > 0 {
+			resp.Fail(http.StatusBadRequest, "本單已對帳收款，無法更換客戶／出貨庫點").Send()
+			return
+		}
+		if shipmentHasOrderLink(db.GetRead(), id) {
+			resp.Fail(http.StatusBadRequest, "本單已關聯訂貨單，無法更換客戶／出貨庫點").Send()
 			return
 		}
 	}

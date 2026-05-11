@@ -135,10 +135,28 @@ func GetStock(c *gin.Context) {
 		}
 	}
 
+	// can_change_party：尚未對帳付款且沒有採購單關聯（主表或任一明細）時才允許切換
+	// 已關聯採購單時若放開切換會讓 StockItem.PurchaseItemID 指向別廠商的 PurchaseItem，導致採購／進貨對帳錯亂
+	canChangeParty := item.ChargeAmount <= 0 && !stockHasPurchaseLink(db.GetRead(), item.ID, item.PurchaseID)
+
 	resp.Success("成功").SetData(map[string]interface{}{
-		"stock":           item,
-		"purchase_no_map": purchaseNoMap,
+		"stock":            item,
+		"purchase_no_map":  purchaseNoMap,
+		"can_change_party": canChangeParty,
 	}).Send()
+}
+
+// stockHasPurchaseLink 判斷進貨單是否有任何採購單關聯（主表 PurchaseID 或明細 PurchaseItemID）。
+// 用於放寬「切換廠商／庫點」時的鎖：一旦有關聯就不能改。
+func stockHasPurchaseLink(db *gorm.DB, stockID int64, purchaseID *int64) bool {
+	if purchaseID != nil {
+		return true
+	}
+	var count int64
+	db.Model(&models.StockItem{}).
+		Where("stock_id = ? AND purchase_item_id IS NOT NULL", stockID).
+		Count(&count)
+	return count > 0
 }
 
 // CreateStock 新增進貨單
@@ -428,6 +446,20 @@ func UpdateStock(c *gin.Context) {
 	if req.CustomerID != 0 {
 		if _, verr := EnsureCustomerVisible(db.GetRead(), req.CustomerID); verr != nil {
 			resp.Fail(http.StatusBadRequest, ErrMsgCustomerNotVisible).Send()
+			return
+		}
+	}
+
+	// 變更進貨庫點／廠商時，本單必須尚未對帳付款且沒有採購單關聯
+	customerChanged := req.CustomerID != 0 && req.CustomerID != existing.CustomerID
+	vendorChanged := req.VendorID != 0 && req.VendorID != existing.VendorID
+	if customerChanged || vendorChanged {
+		if existing.ChargeAmount > 0 {
+			resp.Fail(http.StatusBadRequest, "本單已對帳付款，無法更換進貨庫點／廠商").Send()
+			return
+		}
+		if stockHasPurchaseLink(db.GetRead(), id, existing.PurchaseID) {
+			resp.Fail(http.StatusBadRequest, "本單已關聯採購單，無法更換進貨庫點／廠商").Send()
 			return
 		}
 	}
