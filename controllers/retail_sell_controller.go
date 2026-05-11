@@ -56,8 +56,9 @@ func GetRetailSells(c *gin.Context) {
 	qtyMap := map[int64]int{}
 	if len(sellIDs) > 0 {
 		var rows []qtyRow
+		// 數量一律存正數；sell_mode=2(退貨) 在彙總時 *-1
 		db.GetRead().Model(&models.RetailSellItem{}).
-			Select("retail_sell_id, COALESCE(SUM(total_qty), 0) as sum_qty").
+			Select("retail_sell_id, COALESCE(SUM(CASE WHEN sell_mode = 2 THEN -total_qty ELSE total_qty END), 0) as sum_qty").
 			Where("retail_sell_id IN ?", sellIDs).
 			Group("retail_sell_id").
 			Scan(&rows)
@@ -239,10 +240,12 @@ func CreateRetailSell(c *gin.Context) {
 			return err
 		}
 
+		// 明細金額一律以正數寫入；退貨在彙總/報表時再 *-1
+		var sumCash, sumCard, sumGift float64
 		for _, reqItem := range req.Items {
 			totalQty := 0
 			for _, s := range reqItem.Sizes {
-				totalQty += s.Qty
+				totalQty += int(math.Abs(float64(s.Qty)))
 			}
 
 			sellMode := reqItem.SellMode
@@ -251,16 +254,18 @@ func CreateRetailSell(c *gin.Context) {
 			}
 
 			// 計算金額：折扣為折數（如 85 表示 85 折），0 表示不打折
-			unitPrice := reqItem.SellPrice
+			unitPrice := math.Abs(reqItem.SellPrice)
 			if reqItem.Discount > 0 && reqItem.Discount < 100 {
-				unitPrice = math.Round(reqItem.SellPrice * reqItem.Discount / 100)
+				unitPrice = math.Round(unitPrice * reqItem.Discount / 100)
 			}
 			totalAmount := math.Round(float64(totalQty) * unitPrice)
-
-			// 贈品金額為 0
 			if sellMode == 7 {
 				totalAmount = 0
 			}
+
+			cashAmt := math.Abs(reqItem.CashAmount)
+			cardAmt := math.Abs(reqItem.CardAmount)
+			giftAmt := math.Abs(reqItem.GiftAmount)
 
 			item := models.RetailSellItem{
 				RetailSellID: retailSell.ID,
@@ -268,13 +273,13 @@ func CreateRetailSell(c *gin.Context) {
 				ProductID:    reqItem.ProductID,
 				SizeGroupID:  reqItem.SizeGroupID,
 				MemberID:     reqItem.MemberID,
-				SellPrice:    reqItem.SellPrice,
+				SellPrice:    unitPrice,
 				Discount:     reqItem.Discount,
 				TotalQty:     totalQty,
 				TotalAmount:  totalAmount,
-				CashAmount:   reqItem.CashAmount,
-				CardAmount:   reqItem.CardAmount,
-				GiftAmount:   reqItem.GiftAmount,
+				CashAmount:   cashAmt,
+				CardAmount:   cardAmt,
+				GiftAmount:   giftAmt,
 				SellMode:     sellMode,
 			}
 			if err := tx.Create(&item).Error; err != nil {
@@ -284,21 +289,23 @@ func CreateRetailSell(c *gin.Context) {
 				size := models.RetailSellItemSize{
 					RetailSellItemID: item.ID,
 					SizeOptionID:     s.SizeOptionID,
-					Qty:              s.Qty,
+					Qty:              int(math.Abs(float64(s.Qty))),
 				}
 				if err := tx.Create(&size).Error; err != nil {
 					return err
 				}
 			}
+
+			// 主表付款彙總：退貨以負值參與計算
+			mul := 1.0
+			if sellMode == 2 {
+				mul = -1.0
+			}
+			sumCash += cashAmt * mul
+			sumCard += cardAmt * mul
+			sumGift += giftAmt * mul
 		}
 
-		// 自動彙總明細的付款到主表
-		var sumCash, sumCard, sumGift float64
-		for _, reqItem := range req.Items {
-			sumCash += reqItem.CashAmount
-			sumCard += reqItem.CardAmount
-			sumGift += reqItem.GiftAmount
-		}
 		tx.Model(&retailSell).Updates(map[string]interface{}{
 			"cash_amount": sumCash,
 			"card_amount": sumCard,
@@ -480,12 +487,12 @@ func UpdateRetailSell(c *gin.Context) {
 			return err
 		}
 
-		// 新增明細
+		// 新增明細：金額一律以正數寫入；退貨在彙總/報表時再 *-1
 		var sumCash, sumCard, sumGift float64
 		for _, reqItem := range req.Items {
 			totalQty := 0
 			for _, s := range reqItem.Sizes {
-				totalQty += s.Qty
+				totalQty += int(math.Abs(float64(s.Qty)))
 			}
 
 			sellMode := reqItem.SellMode
@@ -493,18 +500,26 @@ func UpdateRetailSell(c *gin.Context) {
 				sellMode = 1
 			}
 
-			unitPrice := reqItem.SellPrice
+			unitPrice := math.Abs(reqItem.SellPrice)
 			if reqItem.Discount > 0 && reqItem.Discount < 100 {
-				unitPrice = math.Round(reqItem.SellPrice * reqItem.Discount / 100)
+				unitPrice = math.Round(unitPrice * reqItem.Discount / 100)
 			}
 			totalAmount := math.Round(float64(totalQty) * unitPrice)
 			if sellMode == 7 {
 				totalAmount = 0
 			}
 
-			sumCash += reqItem.CashAmount
-			sumCard += reqItem.CardAmount
-			sumGift += reqItem.GiftAmount
+			cashAmt := math.Abs(reqItem.CashAmount)
+			cardAmt := math.Abs(reqItem.CardAmount)
+			giftAmt := math.Abs(reqItem.GiftAmount)
+
+			mul := 1.0
+			if sellMode == 2 {
+				mul = -1.0
+			}
+			sumCash += cashAmt * mul
+			sumCard += cardAmt * mul
+			sumGift += giftAmt * mul
 
 			item := models.RetailSellItem{
 				RetailSellID: id,
@@ -512,13 +527,13 @@ func UpdateRetailSell(c *gin.Context) {
 				ProductID:    reqItem.ProductID,
 				SizeGroupID:  reqItem.SizeGroupID,
 				MemberID:     reqItem.MemberID,
-				SellPrice:    reqItem.SellPrice,
+				SellPrice:    unitPrice,
 				Discount:     reqItem.Discount,
 				TotalQty:     totalQty,
 				TotalAmount:  totalAmount,
-				CashAmount:   reqItem.CashAmount,
-				CardAmount:   reqItem.CardAmount,
-				GiftAmount:   reqItem.GiftAmount,
+				CashAmount:   cashAmt,
+				CardAmount:   cardAmt,
+				GiftAmount:   giftAmt,
 				SellMode:     sellMode,
 			}
 			if err := tx.Create(&item).Error; err != nil {
@@ -528,7 +543,7 @@ func UpdateRetailSell(c *gin.Context) {
 				size := models.RetailSellItemSize{
 					RetailSellItemID: item.ID,
 					SizeOptionID:     s.SizeOptionID,
-					Qty:              s.Qty,
+					Qty:              int(math.Abs(float64(s.Qty))),
 				}
 				if err := tx.Create(&size).Error; err != nil {
 					return err

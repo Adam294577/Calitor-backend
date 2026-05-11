@@ -118,10 +118,11 @@ func GetProductSalesStats(c *gin.Context) {
 	// 「分店」直接用銷貨/出貨單的 sell_store / ship_store 字串(對齊 product_in_out_summary controller),
 	// 顯示分店名稱另外用 customer.code = store_code 反查 (因為 customer.code 是 unique,branch_code 不是)。
 	if txType == "all" || txType == "sell" {
+		// 明細金額一律存正數；sell_mode=2(退貨) 在統計時 *-1
 		sellSQL := `
             SELECT rsi.product_id,
-                   rsi.total_qty AS qty,
-                   rsi.total_amount * (1 + COALESCE(rs.tax_rate, 0) / 100.0) AS actual_amt,
+                   CASE WHEN rsi.sell_mode = 2 THEN -rsi.total_qty ELSE rsi.total_qty END AS qty,
+                   CASE WHEN rsi.sell_mode = 2 THEN -1 ELSE 1 END * rsi.total_amount * (1 + COALESCE(rs.tax_rate, 0) / 100.0) AS actual_amt,
                    COALESCE(rs.sell_store, '') AS store_code
             FROM retail_sell_items rsi
             JOIN retail_sells rs ON rs.id = rsi.retail_sell_id

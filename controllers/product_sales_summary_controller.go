@@ -352,8 +352,11 @@ GROUP BY pss.product_id, pss.size_option_id
 		}
 
 		// 總量 + 金額（item 層級）
+		// 明細金額一律存正數；sell_mode=2(退貨) 在彙總時 *-1
 		totalSQL := fmt.Sprintf(`
-SELECT si.product_id, COALESCE(SUM(si.total_qty),0) AS qty, COALESCE(SUM(si.total_amount),0) AS amount
+SELECT si.product_id,
+       COALESCE(SUM(CASE WHEN si.sell_mode = 2 THEN -si.total_qty ELSE si.total_qty END),0) AS qty,
+       COALESCE(SUM(CASE WHEN si.sell_mode = 2 THEN -si.total_amount ELSE si.total_amount END),0) AS amount
 FROM retail_sells s
 JOIN retail_sell_items si ON si.retail_sell_id = s.id
 %s
@@ -377,8 +380,10 @@ GROUP BY si.product_id
 		}
 
 		// 尺碼展開（item_sizes 層級）
+		// sizes.qty 一律存正數；sell_mode=2(退貨) 在彙總時 *-1
 		sizeSQL := fmt.Sprintf(`
-SELECT si.product_id, sis.size_option_id, COALESCE(SUM(sis.qty),0) AS qty
+SELECT si.product_id, sis.size_option_id,
+       COALESCE(SUM(CASE WHEN si.sell_mode = 2 THEN -sis.qty ELSE sis.qty END),0) AS qty
 FROM retail_sells s
 JOIN retail_sell_items si ON si.retail_sell_id = s.id
 JOIN retail_sell_item_sizes sis ON sis.retail_sell_item_id = si.id
