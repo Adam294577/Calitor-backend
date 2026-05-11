@@ -155,6 +155,69 @@ func GetShipmentSummary(c *gin.Context) {
 		return
 	}
 
+	// 成本以「出貨日(含)之前的所有進貨」加權平均計算,而非讀 shipment_items.ship_cost
+	productIDSet := map[int64]struct{}{}
+	for _, s := range shipments {
+		for _, item := range s.Items {
+			if item.Product == nil {
+				continue
+			}
+			productIDSet[item.ProductID] = struct{}{}
+		}
+	}
+	type purchaseRow struct {
+		ProductID     int64   `gorm:"column:product_id"`
+		PurchaseDate  string  `gorm:"column:purchase_date"`
+		PurchasePrice float64 `gorm:"column:purchase_price"`
+		TotalQty      int     `gorm:"column:total_qty"`
+	}
+	purchasesByProduct := map[int64][]purchaseRow{}
+	if len(productIDSet) > 0 {
+		pids := make([]int64, 0, len(productIDSet))
+		for pid := range productIDSet {
+			pids = append(pids, pid)
+		}
+		var purchaseRows []purchaseRow
+		db.GetRead().
+			Table("purchase_items").
+			Select("purchase_items.product_id, purchases.purchase_date, purchase_items.purchase_price, purchase_items.total_qty").
+			Joins("JOIN purchases ON purchases.id = purchase_items.purchase_id AND purchases.deleted_at IS NULL").
+			Where("purchase_items.product_id IN ?", pids).
+			Where("purchase_items.cancel_flag = ?", 1).
+			Where("purchase_items.total_qty > 0").
+			Find(&purchaseRows)
+		for _, r := range purchaseRows {
+			purchasesByProduct[r.ProductID] = append(purchasesByProduct[r.ProductID], r)
+		}
+		for pid := range purchasesByProduct {
+			rows := purchasesByProduct[pid]
+			sort.Slice(rows, func(i, j int) bool {
+				return rows[i].PurchaseDate < rows[j].PurchaseDate
+			})
+			purchasesByProduct[pid] = rows
+		}
+	}
+	// 回傳出貨日(含)以前的加權平均單位成本;無進貨紀錄回 0
+	weightedAvgCost := func(productID int64, asOfDate string) float64 {
+		rows := purchasesByProduct[productID]
+		if len(rows) == 0 {
+			return 0
+		}
+		var totalAmount float64
+		var totalQty int
+		for _, r := range rows {
+			if r.PurchaseDate > asOfDate {
+				break
+			}
+			totalAmount += r.PurchasePrice * float64(r.TotalQty)
+			totalQty += r.TotalQty
+		}
+		if totalQty == 0 {
+			return 0
+		}
+		return totalAmount / float64(totalQty)
+	}
+
 	type lineEntry struct {
 		shipmentID   int64
 		shipmentNo   string
@@ -168,7 +231,7 @@ func GetShipmentSummary(c *gin.Context) {
 		unitPrice    float64
 		discount     float64
 		amount       float64 // 未稅 (TotalAmount on ShipmentItem)
-		cost         float64 // ShipCost * qty
+		cost         float64 // 加權平均進價 * qty(出貨日含以前的進貨)
 		taxRate      float64
 		taxAmount    float64
 	}
@@ -189,7 +252,7 @@ func GetShipmentSummary(c *gin.Context) {
 				continue
 			}
 			amount := math.Round(item.TotalAmount)
-			cost := math.Round(item.ShipCost * float64(item.TotalQty))
+			cost := math.Round(weightedAvgCost(item.ProductID, s.ShipmentDate) * float64(item.TotalQty))
 			tax := 0.0
 			if s.TaxMode == 2 {
 				tax = math.Round(amount * s.TaxRate / 100)
