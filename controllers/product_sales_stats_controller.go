@@ -265,16 +265,23 @@ func GetProductSalesStats(c *gin.Context) {
 		whereParts = append(whereParts, "UPPER(COALESCE(rc.code, sa.store_code, '')) <= UPPER(?)")
 		whereArgs = append(whereArgs, branchCodeTo)
 	}
+	// created_on 是 timestamp,用 TO_CHAR 比較會打死 index;改用 TO_DATE 把右側轉成 date 再比較。
+	// `<= 'YYYYMMDD'` 等價於 `< TO_DATE + 1 day`,涵蓋當天 23:59:59。
 	if createdFrom != "" {
-		whereParts = append(whereParts, "TO_CHAR(p.created_on, 'YYYYMMDD') >= ?")
+		whereParts = append(whereParts, "p.created_on >= TO_DATE(?, 'YYYYMMDD')")
 		whereArgs = append(whereArgs, createdFrom)
 	}
 	if createdTo != "" {
-		whereParts = append(whereParts, "TO_CHAR(p.created_on, 'YYYYMMDD') <= ?")
+		whereParts = append(whereParts, "p.created_on < TO_DATE(?, 'YYYYMMDD') + INTERVAL '1 day'")
 		whereArgs = append(whereArgs, createdTo)
 	}
-	// 類別篩選只服務於「依類別」「依品牌類別」兩個分組;其他維度即使前端送了也忽略(防呆)
-	if len(categoryIDs) > 0 && (groupBy == "category" || groupBy == "brand_category") {
+	// 「依類別」「依品牌類別」分組:沒掛該層類別的商品要從報表中排除,
+	// 否則 LEFT JOIN pc 為 NULL 的商品會被 COALESCE('') 合併成同一列「空代號/空名稱」。
+	if groupBy == "category" || groupBy == "brand_category" {
+		whereParts = append(whereParts, "pc.id IS NOT NULL")
+	}
+	// 類別篩選對所有 group_by 生效(配合前端開放型號/廠商/分店 也能搭配類別篩選)
+	if len(categoryIDs) > 0 {
 		ph := strings.Repeat("?,", len(categoryIDs))
 		ph = ph[:len(ph)-1]
 		whereParts = append(whereParts, fmt.Sprintf("pcm.category%d_id IN (%s)", categoryLevel, ph))
@@ -288,10 +295,61 @@ func GetProductSalesStats(c *gin.Context) {
 		whereClause = "WHERE " + strings.Join(whereParts, " AND ")
 	}
 
-	// 完整 SQL (category_level 直接內插 1~5 已驗證,安全)
+	// 條件式 JOIN:沒有任何 group_by/filter 用到的表就不要 JOIN,
+	// 否則 group_by=model 也會被迫對 8000+ 列做 LATERAL retail_customers + 一串無用 JOIN,單支跑 26 秒。
+	needsVendor := groupBy == "vendor" || vendorCodeFrom != "" || vendorCodeTo != ""
+	needsBrand := groupBy == "brand_category" || brandCodeFrom != "" || brandCodeTo != ""
+	// category:category/brand_category 直接展示 pc.*;model 的 key2 也用 pc.name;有 categoryIDs 篩選時也要 pcm
+	needsCategory := groupBy == "category" || groupBy == "brand_category" || groupBy == "model" || len(categoryIDs) > 0
+	needsBranch := groupBy == "branch" || branchCodeFrom != "" || branchCodeTo != ""
+
+	joinParts := []string{
+		"JOIN products p ON p.id = sa.product_id AND p.deleted_at IS NULL",
+		"LEFT JOIN costs c ON c.product_id = sa.product_id",
+	}
+	joinArgs := []interface{}{}
+	if needsVendor {
+		joinParts = append(joinParts,
+			"LEFT JOIN product_vendors pv ON pv.product_id = p.id AND pv.is_primary = TRUE",
+			"LEFT JOIN vendors v ON v.id = pv.vendor_id",
+		)
+	}
+	if needsBrand {
+		joinParts = append(joinParts, "LEFT JOIN product_brands pb ON pb.id = p.product_brand_id")
+	}
+	if needsCategory {
+		// category_level 已驗證 1~5,直接內插安全
+		joinParts = append(joinParts,
+			"LEFT JOIN product_category_map pcm ON pcm.product_id = p.id AND pcm.category_type = ?",
+			fmt.Sprintf("LEFT JOIN product_category_%d pc ON pc.id = pcm.category%d_id", categoryLevel, categoryLevel),
+		)
+		joinArgs = append(joinArgs, categoryLevel)
+	}
+	if needsBranch {
+		// store_lookup CTE 先把 sales 的 store_code 抽 distinct 再反查 retail_customers,
+		// 把原本 LATERAL × 8000 列縮成 LATERAL × unique store 數(通常 < 50)。
+		joinParts = append(joinParts, "LEFT JOIN store_lookup rc ON rc.store_code = sa.store_code")
+	}
+
+	extraCTE := ""
+	if needsBranch {
+		extraCTE = `,
+        store_lookup AS (
+            SELECT ds.store_code, rc.code, rc.short_name, rc.name
+            FROM (SELECT DISTINCT store_code FROM sales) ds
+            LEFT JOIN LATERAL (
+                SELECT code, short_name, name FROM retail_customers
+                WHERE deleted_at IS NULL
+                  AND (code = ds.store_code OR branch_code = ds.store_code)
+                ORDER BY (CASE WHEN code = ds.store_code THEN 0 ELSE 1 END), id
+                LIMIT 1
+            ) rc ON TRUE
+        )`
+	}
+
 	sql := fmt.Sprintf(`
         WITH sales AS (%s),
-        costs AS (%s)
+        costs AS (%s)%s
         SELECT
             %s AS key1,
             %s AS key2,
@@ -300,28 +358,15 @@ func GetProductSalesStats(c *gin.Context) {
             COALESCE(SUM(sa.actual_amt), 0)::bigint AS actual_amt,
             COALESCE(SUM(COALESCE(c.cost_price, 0) * sa.qty), 0)::bigint AS cost_amt
         FROM sales sa
-        JOIN products p ON p.id = sa.product_id AND p.deleted_at IS NULL
-        LEFT JOIN costs c ON c.product_id = sa.product_id
-        LEFT JOIN product_vendors pv ON pv.product_id = p.id AND pv.is_primary = TRUE
-        LEFT JOIN vendors v ON v.id = pv.vendor_id
-        LEFT JOIN product_brands pb ON pb.id = p.product_brand_id
-        LEFT JOIN product_category_map pcm ON pcm.product_id = p.id AND pcm.category_type = ?
-        LEFT JOIN product_category_%d pc ON pc.id = pcm.category%d_id
-        LEFT JOIN LATERAL (
-            SELECT code, short_name, name FROM retail_customers
-            WHERE deleted_at IS NULL
-              AND (code = sa.store_code OR branch_code = sa.store_code)
-            ORDER BY (CASE WHEN code = sa.store_code THEN 0 ELSE 1 END), id
-            LIMIT 1
-        ) rc ON TRUE
+        %s
         %s
         GROUP BY %s
         ORDER BY %s
-    `, salesCTE, costsCTE, key1Expr, key2Expr, categoryLevel, categoryLevel, whereClause, groupExpr, orderExpr)
+    `, salesCTE, costsCTE, extraCTE, key1Expr, key2Expr, strings.Join(joinParts, "\n        "), whereClause, groupExpr, orderExpr)
 
 	fullArgs := []interface{}{}
 	fullArgs = append(fullArgs, salesArgs...)
-	fullArgs = append(fullArgs, categoryLevel)
+	fullArgs = append(fullArgs, joinArgs...)
 	fullArgs = append(fullArgs, whereArgs...)
 
 	type rawRow struct {
