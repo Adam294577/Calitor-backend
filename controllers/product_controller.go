@@ -78,6 +78,19 @@ func GetProduct(c *gin.Context) {
 	resp.Success("成功").SetData(item).Send()
 }
 
+// lookupBrandCode 由對帳品牌 ID 查 brands.code,用於同步寫入 product.billing_brand。
+// shipments.vue 仍用 billing_brand 字串排序,所以要與 brand_id 一起維護。
+func lookupBrandCode(db *models.DBManager, id *int64) string {
+	if id == nil {
+		return ""
+	}
+	var b models.Brand
+	if err := db.GetRead().Select("code").Where("id = ?", *id).First(&b).Error; err != nil {
+		return ""
+	}
+	return b.Code
+}
+
 func CreateProduct(c *gin.Context) {
 	resp := response.New(c)
 	db := models.PostgresNew()
@@ -92,7 +105,7 @@ func CreateProduct(c *gin.Context) {
 		OriginalPrice     float64 `json:"original_price"`
 		WholesaleTaxIncl  float64 `json:"wholesale_tax_incl"`
 		WholesaleDiscount float64 `json:"wholesale_discount"`
-		BillingBrand      string  `json:"billing_brand"`
+		BrandID           *int64  `json:"brand_id"`
 		ProductBrandID    *int64  `json:"product_brand_id"`
 		TradeMode         int64   `json:"trade_mode"`
 		IsVisible         bool    `json:"is_visible"`
@@ -148,7 +161,8 @@ func CreateProduct(c *gin.Context) {
 		WholesaleTaxIncl:  req.WholesaleTaxIncl,
 		Wholesale:         math.Round(req.WholesaleTaxIncl / 1.05),
 		WholesaleDiscount: req.WholesaleDiscount,
-		BillingBrand:      req.BillingBrand,
+		BrandId:           req.BrandID,
+		BillingBrand:      lookupBrandCode(db, req.BrandID),
 		ProductBrandId:    req.ProductBrandID,
 		TradeMode:         req.TradeMode,
 		IsVisible:         req.IsVisible,
@@ -286,6 +300,16 @@ func UpdateProduct(c *gin.Context) {
 	// 含稅批價 → 自動計算未稅批價
 	if v, ok := rawReq["wholesale_tax_incl"].(float64); ok {
 		rawReq["wholesale"] = math.Round(v / 1.05)
+	}
+
+	// brand_id 變更時,同步覆寫 billing_brand 為對應 brand.code
+	if v, ok := rawReq["brand_id"]; ok {
+		var bid *int64
+		if f, ok := v.(float64); ok {
+			id := int64(f)
+			bid = &id
+		}
+		rawReq["billing_brand"] = lookupBrandCode(db, bid)
 	}
 
 	// 移除不可更新的欄位
