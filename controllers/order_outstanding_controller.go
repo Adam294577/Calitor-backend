@@ -26,6 +26,8 @@ type orderOutstandingRow struct {
 	Sizes         map[string]int `json:"sizes"`
 	TotalQty      int            `json:"total_qty"`
 	TotalAmount   float64        `json:"total_amount"`
+	// 0=空 1=舖 2=補 3=停（前端用來決定客戶名稱前的 @/# 標記）
+	Supplement int `json:"supplement"`
 }
 
 // outstandingSizeGroup 尺碼組 metadata（含完整 options）
@@ -269,6 +271,7 @@ func GetOrderOutstanding(c *gin.Context) {
 				Sizes:         sizes,
 				TotalQty:      totalQty,
 				TotalAmount:   amount,
+				Supplement:    item.Supplement,
 			},
 			createdOn: productCreatedOn,
 		})
