@@ -155,7 +155,7 @@ func GetShipmentSummary(c *gin.Context) {
 		return
 	}
 
-	// 成本以「出貨日(含)之前的所有進貨」加權平均計算,而非讀 shipment_items.ship_cost
+	// 成本以「出貨日(含)以前最近一筆進貨」的進價計算,而非讀 shipment_items.ship_cost
 	productIDSet := map[int64]struct{}{}
 	for _, s := range shipments {
 		for _, item := range s.Items {
@@ -169,7 +169,6 @@ func GetShipmentSummary(c *gin.Context) {
 		ProductID     int64   `gorm:"column:product_id"`
 		PurchaseDate  string  `gorm:"column:purchase_date"`
 		PurchasePrice float64 `gorm:"column:purchase_price"`
-		TotalQty      int     `gorm:"column:total_qty"`
 	}
 	purchasesByProduct := map[int64][]purchaseRow{}
 	if len(productIDSet) > 0 {
@@ -180,7 +179,7 @@ func GetShipmentSummary(c *gin.Context) {
 		var purchaseRows []purchaseRow
 		db.GetRead().
 			Table("purchase_items").
-			Select("purchase_items.product_id, purchases.purchase_date, purchase_items.purchase_price, purchase_items.total_qty").
+			Select("purchase_items.product_id, purchases.purchase_date, purchase_items.purchase_price").
 			Joins("JOIN purchases ON purchases.id = purchase_items.purchase_id AND purchases.deleted_at IS NULL").
 			Where("purchase_items.product_id IN ?", pids).
 			Where("purchase_items.cancel_flag = ?", 1).
@@ -197,25 +196,20 @@ func GetShipmentSummary(c *gin.Context) {
 			purchasesByProduct[pid] = rows
 		}
 	}
-	// 回傳出貨日(含)以前的加權平均單位成本;無進貨紀錄回 0
-	weightedAvgCost := func(productID int64, asOfDate string) float64 {
+	// 回傳出貨日(含)以前最近一筆進貨的單位進價;無進貨紀錄回 0
+	latestPurchasePrice := func(productID int64, asOfDate string) float64 {
 		rows := purchasesByProduct[productID]
 		if len(rows) == 0 {
 			return 0
 		}
-		var totalAmount float64
-		var totalQty int
+		price := 0.0
 		for _, r := range rows {
 			if r.PurchaseDate > asOfDate {
 				break
 			}
-			totalAmount += r.PurchasePrice * float64(r.TotalQty)
-			totalQty += r.TotalQty
+			price = r.PurchasePrice
 		}
-		if totalQty == 0 {
-			return 0
-		}
-		return totalAmount / float64(totalQty)
+		return price
 	}
 
 	type lineEntry struct {
@@ -231,7 +225,7 @@ func GetShipmentSummary(c *gin.Context) {
 		unitPrice    float64
 		discount     float64
 		amount       float64 // 未稅 (TotalAmount on ShipmentItem)
-		cost         float64 // 加權平均進價 * qty(出貨日含以前的進貨)
+		cost         float64 // 最近一筆進貨單價 * qty(出貨日含以前)
 		taxRate      float64
 		taxAmount    float64
 	}
@@ -252,7 +246,7 @@ func GetShipmentSummary(c *gin.Context) {
 				continue
 			}
 			amount := math.Round(item.TotalAmount)
-			cost := math.Round(weightedAvgCost(item.ProductID, s.ShipmentDate) * float64(item.TotalQty))
+			cost := math.Round(latestPurchasePrice(item.ProductID, s.ShipmentDate) * float64(item.TotalQty))
 			tax := 0.0
 			if s.TaxMode == 2 {
 				tax = math.Round(amount * s.TaxRate / 100)
