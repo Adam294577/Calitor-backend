@@ -935,24 +935,34 @@ func BarcodeParse(c *gin.Context) {
 	}
 
 	// 0. 計算客戶未繳期狀態(parse 階段就回給前端,讓使用者看到 TAB 警示)
+	// 同時取出客戶的 tax_mode/tax_rate,供後面把 NonTaxPrice 換算成 ShipPrice 顯示值
 	type overdueInfo struct {
 		CutoffMonth string `json:"cutoff_month"`
 		Count       int64  `json:"count"`
 	}
 	var overdue *overdueInfo
+	cust, cerr := EnsureCustomerVisible(db.GetRead(), req.CustomerID)
+	if cerr != nil {
+		resp.Fail(http.StatusBadRequest, ErrMsgCustomerNotVisible).Send()
+		return
+	}
 	{
 		shipDate := req.ShipmentDate
 		if shipDate == "" {
 			shipDate = time.Now().Format("20060102")
 		}
-		cust, cerr := EnsureCustomerVisible(db.GetRead(), req.CustomerID)
-		if cerr != nil {
-			resp.Fail(http.StatusBadRequest, ErrMsgCustomerNotVisible).Send()
-			return
-		}
 		if cm, cnt, _ := CheckCustomerOverdueShipments(db.GetRead(), req.CustomerID, shipDate, cust.Month); cnt > 0 {
 			overdue = &overdueInfo{CutoffMonth: cm, Count: cnt}
 		}
+	}
+
+	// ship_price 顯示值換算:含稅模式回 round(nonTax*(1+rate/100));應稅模式直接回 nonTax
+	// 與 utils/shipmentMath.js rowAmountTaxIncl 的 ship_price 語意一致
+	toDisplayPrice := func(nonTax float64) float64 {
+		if cust.TaxMode == 1 {
+			return math.Round(nonTax * (1 + cust.TaxRate/100))
+		}
+		return nonTax
 	}
 
 	// 1. 載入 SizeGroups(排序好的) + 逐筆解析條碼
@@ -1025,58 +1035,78 @@ func BarcodeParse(c *gin.Context) {
 		}
 	}
 
-	// 該客戶 × 各型號最早一次「舖」的 order_price (與鍵盤輸入 supplement_info.first_pu_price 邏輯一致)
-	firstPuPriceMap := map[int64]float64{}
-	// 該客戶 × 各型號是否有出貨歷史(對齊 purchase_controller supplement_info.has_shipment_history)
-	// 用於決定無未交單時 supplement 該設 1(舖) 還是 2(補)
-	hasShipmentSet := map[int64]bool{}
+	// 該客戶 × 各型號最近一筆未取消訂貨明細的 non_tax_price (canonical 未稅基底)
+	recentNonTaxPriceMap := map[int64]float64{}
+	// 該客戶 × 各型號是否有訂貨歷史(對齊 supplement_info.has_order_history)
+	// 用於決定無未交單時 supplement 該設 1(舖) 還是 2(補):訂過就是補
+	hasOrderHistorySet := map[int64]bool{}
 	if len(productIDs) > 0 {
 		type priceRow struct {
-			ProductID  int64
-			OrderPrice float64
+			ProductID   int64
+			NonTaxPrice float64
 		}
 		var priceRows []priceRow
 		db.GetRead().Raw(`
-			SELECT DISTINCT ON (oi.product_id) oi.product_id, oi.order_price
+			SELECT DISTINCT ON (oi.product_id) oi.product_id, oi.non_tax_price
 			FROM order_items oi
 			JOIN orders o ON o.id = oi.order_id AND o.deleted_at IS NULL
-			WHERE o.customer_id = ? AND oi.product_id IN (?) AND oi.supplement = 1
-			ORDER BY oi.product_id, o.order_date ASC, oi.id ASC
+			WHERE o.customer_id = ? AND oi.product_id IN (?) AND oi.cancel_flag < 2
+			ORDER BY oi.product_id, o.order_date DESC, oi.id DESC
 		`, req.CustomerID, productIDs).Scan(&priceRows)
 		for _, r := range priceRows {
-			firstPuPriceMap[r.ProductID] = r.OrderPrice
+			recentNonTaxPriceMap[r.ProductID] = r.NonTaxPrice
 		}
 
-		type shipRow struct {
+		type orderHistRow struct {
 			ProductID int64
 		}
-		var shipRows []shipRow
-		db.GetRead().Table("shipment_items AS si").
-			Select("DISTINCT si.product_id").
-			Joins("JOIN shipments s ON s.id = si.shipment_id AND s.deleted_at IS NULL").
-			Where("s.customer_id = ? AND si.product_id IN ?", req.CustomerID, productIDs).
-			Scan(&shipRows)
-		for _, r := range shipRows {
-			hasShipmentSet[r.ProductID] = true
+		var orderHistRows []orderHistRow
+		db.GetRead().Table("order_items AS oi").
+			Select("DISTINCT oi.product_id").
+			Joins("JOIN orders o ON o.id = oi.order_id AND o.deleted_at IS NULL").
+			Where("o.customer_id = ? AND oi.product_id IN ? AND oi.cancel_flag < 2", req.CustomerID, productIDs).
+			Scan(&orderHistRows)
+		for _, r := range orderHistRows {
+			hasOrderHistorySet[r.ProductID] = true
 		}
 	}
 
-	// 無未交單時的 supplement 判定:該客戶該型號出貨過 → 2(補),否則 1(舖)
+	// 無未交單時的 supplement 判定:該客戶該型號訂過貨 → 2(補),否則 1(舖)
 	supplementForFree := func(productID int64) int {
-		if hasShipmentSet[productID] {
+		if hasOrderHistorySet[productID] {
 			return 2
 		}
 		return 1
 	}
 
-	// 沒命中未交單時的 fallback 批價:first_pu_price > wholesale(未稅)
-	// ship_price 契約是未稅單價;wholesale_tax_incl 是建檔顯示用含稅,不可進入此 fallback
-	// (對齊 SizeQtyTable.vue type='shipment' 鍵盤輸入的邏輯)
-	fallbackShipPrice := func(prod *models.Product) float64 {
-		if pu := firstPuPriceMap[prod.ID]; pu > 0 {
-			return pu
+	// 自由出貨 fallback 的 canonical 未稅基底:歷史最近一筆 > 建檔批價(未稅) > 從含稅批價反推
+	fallbackNonTax := func(prod *models.Product) float64 {
+		if p := recentNonTaxPriceMap[prod.ID]; p > 0 {
+			return p
 		}
-		return prod.Wholesale
+		if prod.Wholesale > 0 {
+			return prod.Wholesale
+		}
+		// wholesale=0 但 wholesale_tax_incl 有填:從含稅反推未稅
+		if prod.WholesaleTaxIncl > 0 && cust.TaxRate > 0 {
+			return math.Round(prod.WholesaleTaxIncl / (1 + cust.TaxRate/100))
+		}
+		return 0
+	}
+
+	// 自由出貨 fallback 的 ship_price 顯示值:
+	// - 有歷史 → 用歷史的 non_tax_price 經 toDisplayPrice 換算
+	// - 無歷史 + 含稅模式 + 商品有填 wholesale_tax_incl → 直接用 wholesale_tax_incl
+	//   (尊重使用者建檔輸入,避免 Wholesale*(1+rate) 與使用者輸入因四捨五入差 1 元)
+	// - 其他 → 用 Wholesale 經 toDisplayPrice 換算
+	fallbackShipPrice := func(prod *models.Product) float64 {
+		if p := recentNonTaxPriceMap[prod.ID]; p > 0 {
+			return toDisplayPrice(p)
+		}
+		if cust.TaxMode == 1 && prod.WholesaleTaxIncl > 0 {
+			return prod.WholesaleTaxIncl
+		}
+		return toDisplayPrice(prod.Wholesale)
 	}
 
 	// 4. 篩掉查無商品的，收集有效的 product_id
@@ -1259,7 +1289,8 @@ func BarcodeParse(c *gin.Context) {
 
 		if !hasCand || len(candidates) == 0 {
 			// 無對應未交訂單 → 仍輸出為自由出貨列(order_item_id=0,批價取建檔批價)
-			// 與鍵盤輸入一致:沒有訂貨單也能照常出貨;Supplement 依該客戶該型號出貨歷史判定
+			// 與鍵盤輸入一致:沒有訂貨單也能照常出貨;Supplement 依該客戶該型號訂貨歷史判定
+			// ship_price 依客戶 tax_mode 決定是含稅還是未稅顯示;non_tax_price 一律 canonical 未稅
 			resultItems = append(resultItems, resultItem{
 				Barcode:        p.Barcode,
 				ModelCode:      p.ModelCode,
@@ -1276,7 +1307,7 @@ func BarcodeParse(c *gin.Context) {
 				SellPrice:      prod.MSRP,
 				Discount:       0,
 				ShipPrice:      fallbackShipPrice(prod),
-				NonTaxPrice:    prod.Wholesale,
+				NonTaxPrice:    fallbackNonTax(prod),
 				Supplement:     supplementForFree(prod.ID),
 				Status:         "ok",
 			})
@@ -1305,6 +1336,8 @@ func BarcodeParse(c *gin.Context) {
 			allocated[allocKey] += take
 			remaining -= take
 
+			// ship_price 依客戶 tax_mode 從 canonical non_tax_price 換算
+			// (避免訂單 tax_mode 與本次出貨 tax_mode 不一致時帶錯)
 			resultItems = append(resultItems, resultItem{
 				Barcode:        p.Barcode,
 				ModelCode:      p.ModelCode,
@@ -1320,7 +1353,7 @@ func BarcodeParse(c *gin.Context) {
 				OutstandingQty: cand.Outstanding,
 				SellPrice:      cand.AdvicePrice,
 				Discount:       cand.Discount,
-				ShipPrice:      cand.OrderPrice,
+				ShipPrice:      toDisplayPrice(cand.NonTaxPrice),
 				NonTaxPrice:    cand.NonTaxPrice,
 				Supplement:     cand.Supplement,
 				Status:         status,
@@ -1345,7 +1378,7 @@ func BarcodeParse(c *gin.Context) {
 				OutstandingQty: lastCand.Outstanding,
 				SellPrice:      lastCand.AdvicePrice,
 				Discount:       lastCand.Discount,
-				ShipPrice:      lastCand.OrderPrice,
+				ShipPrice:      toDisplayPrice(lastCand.NonTaxPrice),
 				NonTaxPrice:    lastCand.NonTaxPrice,
 				Supplement:     lastCand.Supplement,
 				Status:         "warning",

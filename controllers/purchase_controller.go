@@ -681,55 +681,57 @@ func SearchProducts(c *gin.Context) {
 		}
 	}
 
-	// --- 訂貨情境：回傳 supplement_info（舖/補 判定 + 第一次舖的 order_price）---
+	// --- 訂貨情境：回傳 supplement_info（舖/補 判定 + 最近一筆未取消訂貨明細的 order_price）---
 	if orderContext == "1" && customerID != "" && len(items) > 0 {
 		productIDs := make([]int64, 0, len(items))
 		for _, p := range items {
 			productIDs = append(productIDs, p.ID)
 		}
 
-		// (a) 出貨歷史：客戶 × 型號 是否有任何未刪除的出貨明細
-		type shipRow struct {
+		// (a) 訂貨歷史:客戶 × 型號 是否有任何未取消的訂貨明細(cancel_flag<2)
+		//     有 → 下一張視為「補」(2);無 → 視為「舖」(1)
+		type orderHistRow struct {
 			ProductID int64
 		}
-		var shipRows []shipRow
-		db.GetRead().Table("shipment_items AS si").
-			Select("DISTINCT si.product_id").
-			Joins("JOIN shipments s ON s.id = si.shipment_id AND s.deleted_at IS NULL").
-			Where("s.customer_id = ? AND si.product_id IN ?", customerID, productIDs).
-			Scan(&shipRows)
-		hasShipmentSet := map[int64]bool{}
-		for _, r := range shipRows {
-			hasShipmentSet[r.ProductID] = true
+		var orderHistRows []orderHistRow
+		db.GetRead().Table("order_items AS oi").
+			Select("DISTINCT oi.product_id").
+			Joins("JOIN orders o ON o.id = oi.order_id AND o.deleted_at IS NULL").
+			Where("o.customer_id = ? AND oi.product_id IN ? AND oi.cancel_flag < 2", customerID, productIDs).
+			Scan(&orderHistRows)
+		hasOrderHistorySet := map[int64]bool{}
+		for _, r := range orderHistRows {
+			hasOrderHistorySet[r.ProductID] = true
 		}
 
-		// (b) 最早一次「舖」的 order_price（依 order_date ASC, id ASC）
+		// (b) 最近一筆未取消訂貨明細的 non_tax_price (canonical 未稅基底,依 order_date DESC, id DESC)
+		// 前端依 form.tax_mode/tax_rate 自行換算成 order_price/ship_price 顯示值
 		type priceRow struct {
-			ProductID  int64
-			OrderPrice float64
+			ProductID   int64
+			NonTaxPrice float64
 		}
 		var priceRows []priceRow
 		db.GetRead().Raw(`
-			SELECT DISTINCT ON (oi.product_id) oi.product_id, oi.order_price
+			SELECT DISTINCT ON (oi.product_id) oi.product_id, oi.non_tax_price
 			FROM order_items oi
 			JOIN orders o ON o.id = oi.order_id AND o.deleted_at IS NULL
-			WHERE o.customer_id = ? AND oi.product_id IN (?) AND oi.supplement = 1
-			ORDER BY oi.product_id, o.order_date ASC, oi.id ASC
+			WHERE o.customer_id = ? AND oi.product_id IN (?) AND oi.cancel_flag < 2
+			ORDER BY oi.product_id, o.order_date DESC, oi.id DESC
 		`, customerID, productIDs).Scan(&priceRows)
-		firstPuPriceMap := map[int64]float64{}
+		recentNonTaxPriceMap := map[int64]float64{}
 		for _, r := range priceRows {
-			firstPuPriceMap[r.ProductID] = r.OrderPrice
+			recentNonTaxPriceMap[r.ProductID] = r.NonTaxPrice
 		}
 
 		type supplementInfo struct {
-			HasShipmentHistory bool    `json:"has_shipment_history"`
-			FirstPuPrice       float64 `json:"first_pu_price"`
+			HasOrderHistory   bool    `json:"has_order_history"`
+			RecentNonTaxPrice float64 `json:"recent_non_tax_price"`
 		}
 		infoMap := map[int64]supplementInfo{}
 		for _, pid := range productIDs {
 			infoMap[pid] = supplementInfo{
-				HasShipmentHistory: hasShipmentSet[pid],
-				FirstPuPrice:       firstPuPriceMap[pid],
+				HasOrderHistory:   hasOrderHistorySet[pid],
+				RecentNonTaxPrice: recentNonTaxPriceMap[pid],
 			}
 		}
 
