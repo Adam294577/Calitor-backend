@@ -98,17 +98,24 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 	dateFrom := c.Query("date_from")
 	dateTo := c.Query("date_to")
 	kinds := splitNonEmpty(c.Query("kinds"))
+	customerIDs := splitNonEmpty(c.Query("customer_ids"))
+	// 只選了客戶但沒勾任何 kind 時,以全部 8 種 kinds 跑 EXISTS,確保客戶條件仍能套用
+	if len(customerIDs) > 0 && len(kinds) == 0 {
+		kinds = []string{"stock", "shipment", "retail_sell", "modify", "transfer_in", "transfer_out", "order", "purchase"}
+	}
 	if len(kinds) > 0 {
-		// 每種 kind 對應的 (header table, item table, header 業務日期欄)
-		kindMap := map[string][3]string{
-			"stock":        {"stocks", "stock_items", "stock_date"},
-			"shipment":     {"shipments", "shipment_items", "shipment_date"},
-			"retail_sell":  {"retail_sells", "retail_sell_items", "sell_date"},
-			"modify":       {"modifies", "modify_items", "modify_date"},
-			"transfer_in":  {"transfers", "transfer_items", "transfer_date"},
-			"transfer_out": {"transfers", "transfer_items", "transfer_date"},
-			"order":        {"orders", "order_items", "order_date"},
-			"purchase":     {"purchases", "purchase_items", "purchase_date"},
+		// 每種 kind 對應的 (header table, item table, header 業務日期欄, 客戶欄位)
+		// 客戶欄位:大多在 header (xh.customer_id);transfer_in 在 item table (xi.dest_customer_id);
+		// transfer_out 在 header (xh.source_customer_id)。
+		kindMap := map[string][4]string{
+			"stock":        {"stocks", "stock_items", "stock_date", "xh.customer_id"},
+			"shipment":     {"shipments", "shipment_items", "shipment_date", "xh.customer_id"},
+			"retail_sell":  {"retail_sells", "retail_sell_items", "sell_date", "xh.customer_id"},
+			"modify":       {"modifies", "modify_items", "modify_date", "xh.customer_id"},
+			"transfer_in":  {"transfers", "transfer_items", "transfer_date", "xi.dest_customer_id"},
+			"transfer_out": {"transfers", "transfer_items", "transfer_date", "xh.source_customer_id"},
+			"order":        {"orders", "order_items", "order_date", "xh.customer_id"},
+			"purchase":     {"purchases", "purchase_items", "purchase_date", "xh.customer_id"},
 		}
 		// item table 的 FK 欄位
 		fkMap := map[string]string{
@@ -120,7 +127,7 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 			"orders":       "order_id",
 			"purchases":    "purchase_id",
 		}
-		// transfer_in / transfer_out 在 transfer_items 沒有方向欄,兩個方向共用同一張 transfers 查一次。
+		// 同 header+item+customerCol 視為同一個 EXISTS;transfer_in / transfer_out 因客戶欄位不同會各自獨立。
 		seen := map[string]bool{}
 		exists := []string{}
 		for _, k := range kinds {
@@ -128,12 +135,12 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 			if !ok {
 				continue
 			}
-			key := cfg[0] + "|" + cfg[1]
+			key := cfg[0] + "|" + cfg[1] + "|" + cfg[3]
 			if seen[key] {
 				continue
 			}
 			seen[key] = true
-			header, item, dateCol := cfg[0], cfg[1], cfg[2]
+			header, item, dateCol, customerCol := cfg[0], cfg[1], cfg[2], cfg[3]
 			fk := fkMap[header]
 
 			dateParts := []string{}
@@ -145,14 +152,20 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 				dateParts = append(dateParts, fmt.Sprintf("xh.%s <= ?", dateCol))
 				args = append(args, dateTo)
 			}
-			dateClause := ""
+			extra := ""
 			if len(dateParts) > 0 {
-				dateClause = " AND " + strings.Join(dateParts, " AND ")
+				extra += " AND " + strings.Join(dateParts, " AND ")
+			}
+			if len(customerIDs) > 0 {
+				extra += " AND " + customerCol + " IN (" + placeholders(len(customerIDs)) + ")"
+				for _, id := range customerIDs {
+					args = append(args, id)
+				}
 			}
 
 			exists = append(exists, fmt.Sprintf(
 				"EXISTS (SELECT 1 FROM %s xi JOIN %s xh ON xh.id = xi.%s AND xh.deleted_at IS NULL WHERE xi.product_id = p.id%s)",
-				item, header, fk, dateClause,
+				item, header, fk, extra,
 			))
 		}
 		if len(exists) > 0 {
