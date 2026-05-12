@@ -157,9 +157,11 @@ func ParseAndAllocate(db *gorm.DB, customerID int64, entries []Entry) (*ParseAnd
 			VendorID  int64
 		}
 		var pvs []pvRow
+		// 排序：主要廠商優先，其次依 id；前端「一鍵帶入主要廠商」會吃陣列第一筆
 		if err := db.Table("product_vendors").
 			Select("product_id, vendor_id").
 			Where("product_id IN ?", productIDs).
+			Order("is_primary DESC, id ASC").
 			Scan(&pvs).Error; err != nil {
 			return nil, err
 		}

@@ -1,7 +1,6 @@
 package purchase
 
 import (
-	"fmt"
 	"project/models"
 	"project/services/delivery"
 
@@ -24,44 +23,32 @@ func Stop(tx *gorm.DB, purchaseID int64) error {
 type RecentPriceResult struct {
 	PurchasePrice float64 `json:"purchase_price"`
 	CurrencyCode  string  `json:"currency_code"`
-	Source        string  `json:"source"` // "history" | "product" | "empty"
+	Source        string  `json:"source"` // "vendor" | "product" | "empty"
 	Hint          string  `json:"hint"`
 }
 
-// RecentPrice 以 (vendor, product, sizeOption) 三層 fallback 取得參考採購價：
-// 1. 該廠商對此 (product, size) 的最近一次歷史採購
+// RecentPrice 以 (vendor, product) 三層 fallback 取得進貨切廠商時的參考原幣價：
+// 1. product_vendors 該廠商對此商品設定的原幣價（> 0 才採用）
 // 2. 商品建檔 OriginalPrice
 // 3. 空值
-// 任一層 DB 查詢失敗皆 swallow，往下一層 fallback（維持既有行為）。
+// 進貨流程不參考歷史採購價（採購單沒打就只看主檔建立的價）。
+// 任一層 DB 查詢失敗皆 swallow，往下一層 fallback。
+// sizeOptionID 保留參數簽名供將來尺寸層級擴充用，目前未使用。
 func RecentPrice(db *gorm.DB, vendorID, productID, sizeOptionID int64) *RecentPriceResult {
-	type row struct {
-		PurchasePrice float64
-		PurchaseNo    string
-		CurrencyCode  string
-		PurchaseDate  string
-	}
-	var r row
-	err := db.Table("purchase_items pi").
-		Select("pi.purchase_price, p.purchase_no, p.currency_code, p.purchase_date").
-		Joins("JOIN purchase_item_sizes pis ON pis.purchase_item_id = pi.id").
-		Joins("JOIN purchases p ON p.id = pi.purchase_id AND p.deleted_at IS NULL").
-		Where("p.vendor_id = ? AND pi.product_id = ? AND pis.size_option_id = ?", vendorID, productID, sizeOptionID).
-		Order("p.purchase_date DESC, pi.id DESC").
-		Limit(1).
-		Scan(&r).Error
-	if err == nil && r.PurchaseNo != "" {
-		cc := r.CurrencyCode
-		if cc == "" {
-			cc = "RMB"
-		}
+	_ = sizeOptionID
+
+	// Layer 1: 廠商對此商品有設定原幣價，且 > 0 才採用（欄位為後加，可能是 0/NULL）
+	var pv models.ProductVendor
+	if err := db.Where("product_id = ? AND vendor_id = ?", productID, vendorID).First(&pv).Error; err == nil && pv.OriginalPrice > 0 {
 		return &RecentPriceResult{
-			PurchasePrice: r.PurchasePrice,
-			CurrencyCode:  cc,
-			Source:        "history",
-			Hint:          fmt.Sprintf("來自採購單 %s", r.PurchaseNo),
+			PurchasePrice: pv.OriginalPrice,
+			CurrencyCode:  "RMB",
+			Source:        "vendor",
+			Hint:          "廠商商品設定原幣價",
 		}
 	}
 
+	// Layer 2: 商品主檔
 	var product models.Product
 	if err := db.Where("id = ?", productID).First(&product).Error; err == nil && product.OriginalPrice > 0 {
 		return &RecentPriceResult{
