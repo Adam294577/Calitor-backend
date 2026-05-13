@@ -36,16 +36,20 @@ type BatchShipmentItem struct {
 }
 
 // BatchShipmentEntry 批次中單張出貨單(對應一個客戶)。
+// 條碼出貨 UI 允許每個客戶獨立設定稅別/折扣,因此 TaxMode 與 DiscountPercent
+// 走 entry 而非 SharedHeader;SharedHeader 的同名欄位僅作為 fallback。
 type BatchShipmentEntry struct {
-	CustomerID    int64               `json:"customer_id" binding:"required"`
-	ShipStore     string              `json:"ship_store"`
-	TaxRate       float64             `json:"tax_rate"`
-	Remark        string              `json:"remark"`
-	DiscountAmt   float64             `json:"discount_amount"`
-	TaxAmount     float64             `json:"tax_amount"`
-	InvoiceAmount float64             `json:"invoice_amount"`
-	ChargeAmount  float64             `json:"charge_amount"`
-	Items         []BatchShipmentItem `json:"items"`
+	CustomerID      int64               `json:"customer_id" binding:"required"`
+	ShipStore       string              `json:"ship_store"`
+	TaxMode         int                 `json:"tax_mode"`
+	TaxRate         float64             `json:"tax_rate"`
+	DiscountPercent float64             `json:"discount_percent"`
+	Remark          string              `json:"remark"`
+	DiscountAmt     float64             `json:"discount_amount"`
+	TaxAmount       float64             `json:"tax_amount"`
+	InvoiceAmount   float64             `json:"invoice_amount"`
+	ChargeAmount    float64             `json:"charge_amount"`
+	Items           []BatchShipmentItem `json:"items"`
 }
 
 // BatchShipmentSharedHeader 批次共用表頭。
@@ -270,8 +274,16 @@ func CreateShipmentBatch(c *gin.Context) {
 				totalShipAmount += float64(qty) * reqItem.ShipPrice
 			}
 			totalShipAmount = math.Round(totalShipAmount)
+			taxMode := entry.TaxMode
+			if taxMode == 0 {
+				taxMode = sh.TaxMode
+			}
+			discountPct := entry.DiscountPercent
+			if discountPct == 0 {
+				discountPct = sh.DiscountPercent
+			}
 			taxAmt := entry.TaxAmount
-			if taxAmt == 0 && sh.TaxMode == 2 {
+			if taxAmt == 0 && taxMode == 2 {
 				taxAmt = math.Round(totalShipAmount * entry.TaxRate / 100)
 			}
 			dealAmount := math.Round(totalShipAmount + taxAmt - entry.DiscountAmt)
@@ -291,10 +303,10 @@ func CreateShipmentBatch(c *gin.Context) {
 				RecorderID:      recorderID,
 				CloseMonth:      closeMonth,
 				Remark:          entry.Remark,
-				TaxMode:         sh.TaxMode,
+				TaxMode:         taxMode,
 				TaxRate:         entry.TaxRate,
 				TaxAmount:       taxAmt,
-				DiscountPercent: sh.DiscountPercent,
+				DiscountPercent: discountPct,
 				DiscountAmount:  entry.DiscountAmt,
 				InvoiceDate:     sh.ShipmentDate,
 				InvoiceNo:       sh.InvoiceNo,
