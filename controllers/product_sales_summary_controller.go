@@ -35,8 +35,9 @@ type productSalesSummaryRow struct {
 	VendorCode  string                          `json:"vendor_code"`
 	VendorName  string                          `json:"vendor_name"`
 	TradeMode   int64                           `json:"trade_mode"`
-	SizeOptions []productSalesSummarySizeOption `json:"size_options"`
-	StockTotal  int                             `json:"stock_total"`
+	SizeGroupCode string                          `json:"size_group_code"`
+	SizeOptions   []productSalesSummarySizeOption `json:"size_options"`
+	StockTotal    int                             `json:"stock_total"`
 	StockSizes  map[string]int                  `json:"stock_sizes"`
 	SellQty     int                             `json:"sell_qty"`
 	SellAmount  int64                           `json:"sell_amount"`
@@ -245,6 +246,7 @@ ORDER BY %s
 		SortOrder   int    `gorm:"column:sort_order"`
 	}
 	sizeGroupOptions := map[int64][]sizeOptRow{} // group -> ordered options
+	sizeGroupCodeMap := map[int64]string{}       // group id -> code (給「碼」欄顯示)
 	if len(sizeGroupIDSet) > 0 {
 		sgIDs := make([]int64, 0, len(sizeGroupIDSet))
 		for id := range sizeGroupIDSet {
@@ -262,6 +264,23 @@ ORDER BY %s
 		}
 		for _, r := range rows {
 			sizeGroupOptions[r.SizeGroupID] = append(sizeGroupOptions[r.SizeGroupID], r)
+		}
+		// 取 size_group code 供「碼」欄顯示
+		type sgCodeRow struct {
+			ID   int64  `gorm:"column:id"`
+			Code string `gorm:"column:code"`
+		}
+		var sgRows []sgCodeRow
+		if err := db.GetRead().
+			Table("size_groups").
+			Select("id, code").
+			Where("id IN ?", sgIDs).
+			Scan(&sgRows).Error; err != nil {
+			resp.Panic(err).Send()
+			return
+		}
+		for _, r := range sgRows {
+			sizeGroupCodeMap[r.ID] = r.Code
 		}
 	}
 
@@ -515,20 +534,21 @@ GROUP BY si.product_id, sis.size_option_id
 
 		sm := sellMap[h.ID]
 		rowsOut = append(rowsOut, productSalesSummaryRow{
-			ProductID:   h.ID,
-			ModelCode:   h.ModelCode,
-			NameSpec:    h.NameSpec,
-			BrandCode:   h.BrandCode,
-			BrandName:   h.BrandName,
-			VendorCode:  h.VendorCode,
-			VendorName:  h.VendorName,
-			TradeMode:   h.TradeMode,
-			SizeOptions: productSizeOptions[h.ID],
-			StockTotal:  stockTotal,
-			StockSizes:  stockSizes,
-			SellQty:     sm.Qty,
-			SellAmount:  int64(math.Round(sm.Amount)),
-			SellSizes:   sellSizes,
+			ProductID:     h.ID,
+			ModelCode:     h.ModelCode,
+			NameSpec:      h.NameSpec,
+			BrandCode:     h.BrandCode,
+			BrandName:     h.BrandName,
+			VendorCode:    h.VendorCode,
+			VendorName:    h.VendorName,
+			TradeMode:     h.TradeMode,
+			SizeGroupCode: sizeGroupCodeMap[h.Size1GroupID],
+			SizeOptions:   productSizeOptions[h.ID],
+			StockTotal:    stockTotal,
+			StockSizes:    stockSizes,
+			SellQty:       sm.Qty,
+			SellAmount:    int64(math.Round(sm.Amount)),
+			SellSizes:     sellSizes,
 		})
 	}
 
