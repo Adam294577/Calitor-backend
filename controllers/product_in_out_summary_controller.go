@@ -34,6 +34,7 @@ type detailRow struct {
 	Sizes        map[string]int `json:"sizes"`
 	TotalQty     int            `json:"total_qty"`
 	UnitPrice    float64        `json:"unit_price"`
+	VendorCode   string         `json:"vendor_code"`
 	VendorName   string         `json:"vendor_name"`
 	DocDate      string         `json:"doc_date"`
 	ModifiedDate string         `json:"modified_date"`
@@ -369,6 +370,7 @@ type rawSizeRow struct {
 	BranchCode   string  `gorm:"column:branch_code"`
 	BranchName   string  `gorm:"column:branch_name"`
 	UnitPrice    float64 `gorm:"column:unit_price"`
+	VendorCode   string  `gorm:"column:vendor_code"`
 	VendorName   string  `gorm:"column:vendor_name"`
 	UpdatedAt    string  `gorm:"column:updated_at"`
 	ModifiedBy   string  `gorm:"column:modified_by"`
@@ -391,6 +393,7 @@ func aggregateBySizes(raws []rawSizeRow, kind, kindLabel string) []detailRow {
 				BranchName:   r.BranchName,
 				Sizes:        map[string]int{},
 				UnitPrice:    r.UnitPrice,
+				VendorCode:   r.VendorCode,
 				VendorName:   r.VendorName,
 				DocDate:      r.DocDate,
 				ModifiedDate: r.UpdatedAt,
@@ -438,6 +441,7 @@ SELECT
   COALESCE(rc.branch_code, '') AS branch_code,
   COALESCE(NULLIF(rc.short_name, ''), rc.name, '') AS branch_name,
   COALESCE(si.purchase_price, 0) AS unit_price,
+  COALESCE(v.code, '') AS vendor_code,
   COALESCE(NULLIF(v.short_name, ''), v.name, '') AS vendor_name,
   TO_CHAR(s.updated_at AT TIME ZONE 'Asia/Taipei', 'YYYYMMDD') AS updated_at,
   COALESCE(a.account, '') AS modified_by,
@@ -496,6 +500,7 @@ SELECT
   COALESCE(s.ship_store, '') AS branch_code,
   COALESCE(NULLIF(branch.short_name, ''), branch.name, '') AS branch_name,
   COALESCE(si.ship_price, 0) AS unit_price,
+  COALESCE(rc.code, '') AS vendor_code,
   COALESCE(NULLIF(rc.short_name, ''), rc.name, '') AS vendor_name,
   TO_CHAR(s.updated_at AT TIME ZONE 'Asia/Taipei', 'YYYYMMDD') AS updated_at,
   COALESCE(a.account, '') AS modified_by,
@@ -557,6 +562,7 @@ SELECT
   COALESCE(s.sell_store, '') AS branch_code,
   COALESCE(NULLIF(branch.short_name, ''), branch.name, '') AS branch_name,
   COALESCE(si.sell_price, 0) AS unit_price,
+  '' AS vendor_code,
   COALESCE(NULLIF(rc.short_name, ''), rc.name, '') AS vendor_name,
   TO_CHAR(s.updated_at AT TIME ZONE 'Asia/Taipei', 'YYYYMMDD') AS updated_at,
   COALESCE(a.account, '') AS modified_by,
@@ -618,6 +624,7 @@ SELECT
   COALESCE(m.modify_store, '') AS branch_code,
   COALESCE(NULLIF(branch.short_name, ''), branch.name, '') AS branch_name,
   0 AS unit_price,
+  '' AS vendor_code,
   COALESCE(NULLIF(rc.short_name, ''), rc.name, '') AS vendor_name,
   TO_CHAR(m.updated_at AT TIME ZONE 'Asia/Taipei', 'YYYYMMDD') AS updated_at,
   COALESCE(a.account, '') AS modified_by,
@@ -680,6 +687,7 @@ SELECT
   COALESCE(t.source_store, '') AS branch_code,
   COALESCE(NULLIF(branch.short_name, ''), branch.name, '') AS branch_name,
   COALESCE(ti.unit_price, 0) AS unit_price,
+  '' AS vendor_code,
   COALESCE(NULLIF(dest.short_name, ''), dest.name, '') AS vendor_name,
   TO_CHAR(t.updated_at AT TIME ZONE 'Asia/Taipei', 'YYYYMMDD') AS updated_at,
   COALESCE(a.account, '') AS modified_by,
@@ -745,6 +753,7 @@ SELECT
   COALESCE(ti.dest_store, '') AS branch_code,
   COALESCE(NULLIF(branch.short_name, ''), branch.name, '') AS branch_name,
   COALESCE(ti.unit_price, 0) AS unit_price,
+  '' AS vendor_code,
   COALESCE(NULLIF(src.short_name, ''), src.name, '') AS vendor_name,
   TO_CHAR(t.updated_at AT TIME ZONE 'Asia/Taipei', 'YYYYMMDD') AS updated_at,
   COALESCE(a.account, '') AS modified_by,
@@ -809,6 +818,7 @@ SELECT
   COALESCE(o.order_store, '') AS branch_code,
   COALESCE(NULLIF(branch.short_name, ''), branch.name, '') AS branch_name,
   COALESCE(oi.order_price, 0) AS unit_price,
+  COALESCE(rc.code, '') AS vendor_code,
   COALESCE(NULLIF(rc.short_name, ''), rc.name, '') AS vendor_name,
   TO_CHAR(o.updated_at AT TIME ZONE 'Asia/Taipei', 'YYYYMMDD') AS updated_at,
   COALESCE(a.account, '') AS modified_by,
@@ -860,6 +870,7 @@ SELECT
   COALESCE(rc.branch_code, '') AS branch_code,
   COALESCE(NULLIF(rc.short_name, ''), rc.name, '') AS branch_name,
   COALESCE(pi.purchase_price, 0) AS unit_price,
+  COALESCE(v.code, '') AS vendor_code,
   COALESCE(NULLIF(v.short_name, ''), v.name, '') AS vendor_name,
   TO_CHAR(p.updated_at AT TIME ZONE 'Asia/Taipei', 'YYYYMMDD') AS updated_at,
   COALESCE(a.account, '') AS modified_by,
