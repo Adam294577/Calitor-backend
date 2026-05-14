@@ -530,7 +530,10 @@ SELECT
 FROM shipments s
 JOIN shipment_items si ON si.shipment_id = s.id
 LEFT JOIN shipment_item_sizes sis ON sis.shipment_item_id = si.id
-LEFT JOIN retail_customers branch ON branch.code = s.ship_store AND branch.deleted_at IS NULL
+LEFT JOIN LATERAL (
+  SELECT short_name, name FROM retail_customers
+  WHERE branch_code = s.ship_store AND deleted_at IS NULL LIMIT 1
+) branch ON TRUE
 LEFT JOIN retail_customers rc ON rc.id = s.customer_id
 LEFT JOIN admins a ON a.id = s.recorder_id
 %s
@@ -648,7 +651,10 @@ SELECT
 FROM modifies m
 JOIN modify_items mi ON mi.modify_id = m.id
 LEFT JOIN modify_item_sizes mis ON mis.modify_item_id = mi.id
-LEFT JOIN retail_customers branch ON branch.code = m.modify_store AND branch.deleted_at IS NULL
+LEFT JOIN LATERAL (
+  SELECT short_name, name FROM retail_customers
+  WHERE branch_code = m.modify_store AND deleted_at IS NULL LIMIT 1
+) branch ON TRUE
 LEFT JOIN retail_customers rc ON rc.id = m.customer_id
 LEFT JOIN admins a ON a.id = m.recorder_id
 %s
@@ -708,8 +714,14 @@ SELECT
 FROM transfers t
 JOIN transfer_items ti ON ti.transfer_id = t.id
 LEFT JOIN transfer_item_sizes tis ON tis.transfer_item_id = ti.id
-LEFT JOIN retail_customers branch ON branch.code = t.source_store AND branch.deleted_at IS NULL
-LEFT JOIN retail_customers dest ON dest.code = ti.dest_store AND dest.deleted_at IS NULL
+LEFT JOIN LATERAL (
+  SELECT short_name, name FROM retail_customers
+  WHERE branch_code = t.source_store AND deleted_at IS NULL LIMIT 1
+) branch ON TRUE
+LEFT JOIN LATERAL (
+  SELECT short_name, name FROM retail_customers
+  WHERE branch_code = ti.dest_store AND deleted_at IS NULL LIMIT 1
+) dest ON TRUE
 LEFT JOIN admins a ON a.id = t.recorder_id
 %s
 ORDER BY t.transfer_date, ti.id
@@ -768,8 +780,14 @@ SELECT
 FROM transfers t
 JOIN transfer_items ti ON ti.transfer_id = t.id
 LEFT JOIN transfer_item_sizes tis ON tis.transfer_item_id = ti.id
-LEFT JOIN retail_customers branch ON branch.code = ti.dest_store AND branch.deleted_at IS NULL
-LEFT JOIN retail_customers src ON src.code = t.source_store AND src.deleted_at IS NULL
+LEFT JOIN LATERAL (
+  SELECT short_name, name FROM retail_customers
+  WHERE branch_code = ti.dest_store AND deleted_at IS NULL LIMIT 1
+) branch ON TRUE
+LEFT JOIN LATERAL (
+  SELECT short_name, name FROM retail_customers
+  WHERE branch_code = t.source_store AND deleted_at IS NULL LIMIT 1
+) src ON TRUE
 LEFT JOIN admins a ON a.id = t.recorder_id
 %s
 ORDER BY t.transfer_date, ti.id
@@ -827,7 +845,10 @@ SELECT
 FROM orders o
 JOIN order_items oi ON oi.order_id = o.id
 LEFT JOIN order_item_sizes ois ON ois.order_item_id = oi.id
-LEFT JOIN retail_customers branch ON branch.code = o.order_store AND branch.deleted_at IS NULL
+LEFT JOIN LATERAL (
+  SELECT short_name, name FROM retail_customers
+  WHERE branch_code = o.order_store AND deleted_at IS NULL LIMIT 1
+) branch ON TRUE
 LEFT JOIN retail_customers rc ON rc.id = o.customer_id
 LEFT JOIN admins a ON a.id = o.recorder_id
 %s
