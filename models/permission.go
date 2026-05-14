@@ -464,6 +464,7 @@ func SeedMasterDataPermissions(db *DBManager) {
 		{Key: "vendor-stock-summary", Name: "廠商進貨統計", Sort: 5, ParentId: &statisticalReports.ID},
 		{Key: "customer-order-summary", Name: "客戶訂貨統計", Sort: 6, ParentId: &statisticalReports.ID},
 		{Key: "vendor-purchase-summary", Name: "廠商採購統計", Sort: 7, ParentId: &statisticalReports.ID},
+		{Key: "purchase-record-query", Name: "進貨紀錄查詢", Sort: 8, ParentId: &statisticalReports.ID},
 	}
 	for i, p := range statisticalMid {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&statisticalMid[i])
@@ -478,6 +479,7 @@ func SeedMasterDataPermissions(db *DBManager) {
 		{Key: "vendor-stock-summary.view", Name: "檢視廠商進貨統計", Sort: 1, ParentId: &statisticalMid[4].ID},
 		{Key: "customer-order-summary.view", Name: "檢視客戶訂貨統計", Sort: 1, ParentId: &statisticalMid[5].ID},
 		{Key: "vendor-purchase-summary.view", Name: "檢視廠商採購統計", Sort: 1, ParentId: &statisticalMid[6].ID},
+		{Key: "purchase-record-query.view", Name: "檢視進貨紀錄查詢", Sort: 1, ParentId: &statisticalMid[7].ID},
 	}
 	for _, p := range statisticalLeaf {
 		db.GetWrite().Where("key = ?", p.Key).FirstOrCreate(&p)
