@@ -24,6 +24,12 @@ func GetProducts(c *gin.Context) {
 	var items []models.Product
 	query := db.GetRead().Order(ModelCodeOrderBy("model_code"))
 	query = ApplySearch(query, c.Query("search"), "model_code", "name_spec")
+	if mc := c.Query("model_code"); mc != "" {
+		query = query.Where("model_code ILIKE ?", "%"+mc+"%")
+	}
+	if ns := c.Query("name_spec"); ns != "" {
+		query = query.Where("name_spec ILIKE ?", "%"+ns+"%")
+	}
 	if brandId := c.Query("brand_id"); brandId != "" {
 		query = query.Where("brand_id = ?", brandId)
 	}
