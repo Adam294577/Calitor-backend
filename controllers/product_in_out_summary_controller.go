@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -102,7 +101,7 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 	customerIDs := splitNonEmpty(c.Query("customer_ids"))
 	// 只選了客戶但沒勾任何 kind 時,以全部 8 種 kinds 跑 EXISTS,確保客戶條件仍能套用
 	if len(customerIDs) > 0 && len(kinds) == 0 {
-		kinds = []string{"stock", "shipment", "retail_sell", "modify", "transfer_in", "transfer_out", "order", "purchase"}
+		kinds = []string{"stock", "shipment", "retail_sell", "modify", "transfer_in", "transfer_out", "order", "purchase", "inventory"}
 	}
 	if len(kinds) > 0 {
 		// 每種 kind 對應的 (header table, item table, header 業務日期欄, 客戶欄位)
@@ -168,6 +167,25 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 				"EXISTS (SELECT 1 FROM %s xi JOIN %s xh ON xh.id = xi.%s AND xh.deleted_at IS NULL WHERE xi.product_id = p.id%s)",
 				item, header, fk, extra,
 			))
+		}
+		// 庫存：當前 product_size_stocks 有非 0 qty(忽略日期，仍套用客戶過濾)
+		hasInventory := false
+		for _, k := range kinds {
+			if k == "inventory" {
+				hasInventory = true
+				break
+			}
+		}
+		if hasInventory {
+			invExists := "EXISTS (SELECT 1 FROM product_size_stocks pss WHERE pss.product_id = p.id AND pss.qty != 0"
+			if len(customerIDs) > 0 {
+				invExists += " AND pss.customer_id IN (" + placeholders(len(customerIDs)) + ")"
+				for _, id := range customerIDs {
+					args = append(args, id)
+				}
+			}
+			invExists += ")"
+			exists = append(exists, invExists)
 		}
 		if len(exists) > 0 {
 			where += " AND (" + strings.Join(exists, " OR ") + ")"
@@ -243,18 +261,10 @@ func GetProductInOutSummaryDetail(c *gin.Context) {
 	branchIDs := splitNonEmpty(c.Query("branch_ids"))
 	txDateFrom := c.Query("tx_date_from")
 	txDateTo := c.Query("tx_date_to")
-	// 計算當日庫存數量未勾＝排除當日：將 txDateTo 上限改為昨天
-	if c.Query("exclude_today") == "1" {
-		loc, _ := time.LoadLocation("Asia/Taipei")
-		yesterday := time.Now().In(loc).AddDate(0, 0, -1).Format("20060102")
-		if txDateTo == "" || txDateTo > yesterday {
-			txDateTo = yesterday
-		}
-	}
 	kinds := splitNonEmpty(c.Query("kinds"))
 	if len(kinds) == 0 {
 		// 預設全部
-		kinds = []string{"stock", "shipment", "retail_sell", "modify", "transfer_in", "transfer_out", "order", "purchase"}
+		kinds = []string{"stock", "shipment", "retail_sell", "modify", "transfer_in", "transfer_out", "order", "purchase", "inventory"}
 	}
 	kindSet := map[string]bool{}
 	for _, k := range kinds {
@@ -337,17 +347,28 @@ func GetProductInOutSummaryDetail(c *gin.Context) {
 		}
 		allRows = append(allRows, rows...)
 	}
+	if kindSet["inventory"] {
+		rows, err := queryInventoryRows(db, productID, branchIDs)
+		if err != nil {
+			resp.Panic(err).Send()
+			return
+		}
+		allRows = append(allRows, rows...)
+	}
 
-	// 依 kind 排序順序：進貨 → 出貨 → 銷貨 → 調整 → 調出 → 調入 → 訂貨 → 採購
+	// 依 kind 排序順序：進貨 → 出貨 → 銷貨 → 調整 → 調出 → 調入 → 訂貨 → 採購 → 庫存
 	kindOrder := map[string]int{
 		"stock": 1, "shipment": 2, "retail_sell": 3, "modify": 4,
-		"transfer_out": 5, "transfer_in": 6, "order": 7, "purchase": 8,
+		"transfer_out": 5, "transfer_in": 6, "order": 7, "purchase": 8, "inventory": 9,
 	}
 	sort.SliceStable(allRows, func(i, j int) bool {
 		ki := kindOrder[allRows[i].Kind]
 		kj := kindOrder[allRows[j].Kind]
 		if ki != kj {
 			return ki < kj
+		}
+		if allRows[i].Kind == "inventory" {
+			return allRows[i].BranchCode < allRows[j].BranchCode
 		}
 		if allRows[i].DocDate != allRows[j].DocDate {
 			return allRows[i].DocDate < allRows[j].DocDate
@@ -509,10 +530,7 @@ SELECT
 FROM shipments s
 JOIN shipment_items si ON si.shipment_id = s.id
 LEFT JOIN shipment_item_sizes sis ON sis.shipment_item_id = si.id
-LEFT JOIN LATERAL (
-  SELECT short_name, name FROM retail_customers
-  WHERE branch_code = s.ship_store AND deleted_at IS NULL LIMIT 1
-) branch ON TRUE
+LEFT JOIN retail_customers branch ON branch.code = s.ship_store AND branch.deleted_at IS NULL
 LEFT JOIN retail_customers rc ON rc.id = s.customer_id
 LEFT JOIN admins a ON a.id = s.recorder_id
 %s
@@ -571,10 +589,7 @@ SELECT
 FROM retail_sells s
 JOIN retail_sell_items si ON si.retail_sell_id = s.id
 LEFT JOIN retail_sell_item_sizes sis ON sis.retail_sell_item_id = si.id
-LEFT JOIN LATERAL (
-  SELECT short_name, name FROM retail_customers
-  WHERE branch_code = s.sell_store AND deleted_at IS NULL LIMIT 1
-) branch ON TRUE
+LEFT JOIN retail_customers branch ON branch.code = s.sell_store AND branch.deleted_at IS NULL
 LEFT JOIN retail_customers rc ON rc.id = s.customer_id
 LEFT JOIN admins a ON a.id = s.recorder_id
 %s
@@ -633,10 +648,7 @@ SELECT
 FROM modifies m
 JOIN modify_items mi ON mi.modify_id = m.id
 LEFT JOIN modify_item_sizes mis ON mis.modify_item_id = mi.id
-LEFT JOIN LATERAL (
-  SELECT short_name, name FROM retail_customers
-  WHERE branch_code = m.modify_store AND deleted_at IS NULL LIMIT 1
-) branch ON TRUE
+LEFT JOIN retail_customers branch ON branch.code = m.modify_store AND branch.deleted_at IS NULL
 LEFT JOIN retail_customers rc ON rc.id = m.customer_id
 LEFT JOIN admins a ON a.id = m.recorder_id
 %s
@@ -696,14 +708,8 @@ SELECT
 FROM transfers t
 JOIN transfer_items ti ON ti.transfer_id = t.id
 LEFT JOIN transfer_item_sizes tis ON tis.transfer_item_id = ti.id
-LEFT JOIN LATERAL (
-  SELECT short_name, name FROM retail_customers
-  WHERE branch_code = t.source_store AND deleted_at IS NULL LIMIT 1
-) branch ON TRUE
-LEFT JOIN LATERAL (
-  SELECT short_name, name FROM retail_customers
-  WHERE branch_code = ti.dest_store AND deleted_at IS NULL LIMIT 1
-) dest ON TRUE
+LEFT JOIN retail_customers branch ON branch.code = t.source_store AND branch.deleted_at IS NULL
+LEFT JOIN retail_customers dest ON dest.code = ti.dest_store AND dest.deleted_at IS NULL
 LEFT JOIN admins a ON a.id = t.recorder_id
 %s
 ORDER BY t.transfer_date, ti.id
@@ -762,14 +768,8 @@ SELECT
 FROM transfers t
 JOIN transfer_items ti ON ti.transfer_id = t.id
 LEFT JOIN transfer_item_sizes tis ON tis.transfer_item_id = ti.id
-LEFT JOIN LATERAL (
-  SELECT short_name, name FROM retail_customers
-  WHERE branch_code = ti.dest_store AND deleted_at IS NULL LIMIT 1
-) branch ON TRUE
-LEFT JOIN LATERAL (
-  SELECT short_name, name FROM retail_customers
-  WHERE branch_code = t.source_store AND deleted_at IS NULL LIMIT 1
-) src ON TRUE
+LEFT JOIN retail_customers branch ON branch.code = ti.dest_store AND branch.deleted_at IS NULL
+LEFT JOIN retail_customers src ON src.code = t.source_store AND src.deleted_at IS NULL
 LEFT JOIN admins a ON a.id = t.recorder_id
 %s
 ORDER BY t.transfer_date, ti.id
@@ -827,10 +827,7 @@ SELECT
 FROM orders o
 JOIN order_items oi ON oi.order_id = o.id
 LEFT JOIN order_item_sizes ois ON ois.order_item_id = oi.id
-LEFT JOIN LATERAL (
-  SELECT short_name, name FROM retail_customers
-  WHERE branch_code = o.order_store AND deleted_at IS NULL LIMIT 1
-) branch ON TRUE
+LEFT JOIN retail_customers branch ON branch.code = o.order_store AND branch.deleted_at IS NULL
 LEFT JOIN retail_customers rc ON rc.id = o.customer_id
 LEFT JOIN admins a ON a.id = o.recorder_id
 %s
@@ -891,6 +888,47 @@ ORDER BY p.purchase_date, p.id
 		return nil, err
 	}
 	return aggregateBySizes(raws, "purchase", "採購"), nil
+}
+
+// queryInventoryRows 庫存：依 product_size_stocks 當前快照，每庫點彙整成一列。
+// 不套用日期區間（庫存是即時值）；branch_ids 仍生效。
+// 透過將 customer_id 塞入 rawSizeRow.HeaderID 作為分桶 key，重用 aggregateBySizes 取得「一庫點一列」。
+func queryInventoryRows(db *models.DBManager, productID string, branchIDs []string) ([]detailRow, error) {
+	where := "WHERE p.deleted_at IS NULL AND pss.qty != 0 AND pss.product_id = ?"
+	args := []interface{}{productID}
+	if len(branchIDs) > 0 {
+		where += " AND pss.customer_id IN (" + placeholders(len(branchIDs)) + ")"
+		for _, id := range branchIDs {
+			args = append(args, id)
+		}
+	}
+
+	sql := fmt.Sprintf(`
+SELECT
+  pss.customer_id AS header_id,
+  '' AS doc_no,
+  '' AS doc_date,
+  COALESCE(rc.branch_code, '') AS branch_code,
+  COALESCE(NULLIF(rc.short_name, ''), rc.name, '') AS branch_name,
+  0 AS unit_price,
+  '' AS vendor_code,
+  '' AS vendor_name,
+  '' AS updated_at,
+  '' AS modified_by,
+  pss.size_option_id AS size_option_id,
+  pss.qty AS qty
+FROM product_size_stocks pss
+JOIN products p ON p.id = pss.product_id
+LEFT JOIN retail_customers rc ON rc.id = pss.customer_id
+%s
+ORDER BY rc.branch_code, pss.size_option_id
+`, where)
+
+	var raws []rawSizeRow
+	if err := db.GetRead().Raw(sql, args...).Scan(&raws).Error; err != nil {
+		return nil, err
+	}
+	return aggregateBySizes(raws, "inventory", "庫存"), nil
 }
 
 // splitNonEmpty 拆分逗號分隔字串，去掉空字串
