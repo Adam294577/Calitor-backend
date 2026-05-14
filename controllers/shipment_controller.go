@@ -389,7 +389,14 @@ func CreateShipment(c *gin.Context) {
 		// 收集需要更新 delivery status 的 orderIDs
 		orderIDSet := map[int64]bool{}
 
-		for _, reqItem := range req.Items {
+		// 後端依 model_code 自然序重排,忽略前端送的 item_order
+		pids := make([]int64, len(req.Items))
+		for i, it := range req.Items {
+			pids[i] = it.ProductID
+		}
+		permut := ReorderItemsByModelCode(tx, pids)
+		for newOrder, origIdx := range permut {
+			reqItem := req.Items[origIdx]
 			totalQty := 0
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
@@ -401,7 +408,7 @@ func CreateShipment(c *gin.Context) {
 				ProductID:   reqItem.ProductID,
 				SizeGroupID: reqItem.SizeGroupID,
 				OrderItemID: reqItem.OrderItemID,
-				ItemOrder:   reqItem.ItemOrder,
+				ItemOrder:   newOrder,
 				SellPrice:   reqItem.SellPrice,
 				Discount:    reqItem.Discount,
 				ShipPrice:   reqItem.ShipPrice,
@@ -679,7 +686,14 @@ func UpdateShipment(c *gin.Context) {
 
 		newOrderIDSet := map[int64]bool{}
 
-		for _, reqItem := range req.Items {
+		// 後端依 model_code 自然序重排,忽略前端送的 item_order
+		pids := make([]int64, len(req.Items))
+		for i, it := range req.Items {
+			pids[i] = it.ProductID
+		}
+		permut := ReorderItemsByModelCode(tx, pids)
+		for newOrder, origIdx := range permut {
+			reqItem := req.Items[origIdx]
 			totalQty := 0
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
@@ -691,7 +705,7 @@ func UpdateShipment(c *gin.Context) {
 				ProductID:   reqItem.ProductID,
 				SizeGroupID: reqItem.SizeGroupID,
 				OrderItemID: reqItem.OrderItemID,
-				ItemOrder:   reqItem.ItemOrder,
+				ItemOrder:   newOrder,
 				SellPrice:   reqItem.SellPrice,
 				Discount:    reqItem.Discount,
 				ShipPrice:   reqItem.ShipPrice,

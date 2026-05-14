@@ -23,6 +23,24 @@ func CreateTransferBatch(c *gin.Context) {
 	db := models.PostgresNew()
 	defer db.Close()
 
+	// 後端依 model_code 自然序重排每張單的明細,忽略前端送的 item_order
+	// (service 寫入時用 reqItem.ItemOrder,所以同步把 ItemOrder 設為新位置)
+	for ti := range payload.Transfers {
+		items := payload.Transfers[ti].Items
+		pids := make([]int64, len(items))
+		for i, it := range items {
+			pids[i] = it.ProductID
+		}
+		permut := ReorderItemsByModelCode(db.GetRead(), pids)
+		sorted := make([]transfersvc.CreateBatchItem, len(permut))
+		for newOrder, origIdx := range permut {
+			it := items[origIdx]
+			it.ItemOrder = newOrder
+			sorted[newOrder] = it
+		}
+		payload.Transfers[ti].Items = sorted
+	}
+
 	var created []transfersvc.CreatedInfo
 	err := db.GetWrite().Transaction(func(tx *gorm.DB) error {
 		out, e := transfersvc.CreateBatch(tx, payload, getAdminId(c))

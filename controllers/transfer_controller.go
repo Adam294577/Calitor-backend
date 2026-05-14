@@ -197,11 +197,21 @@ func CreateTransfer(c *gin.Context) {
 			return err
 		}
 
+		// 後端依 model_code 自然序重排,忽略前端送的 item_order。
+		// 兩段式插入(newItems → 拿 ID → newSizes)均以 permut 順序為主,
+		// newItems[k] 與 req.Items[permut[k]] 對應的 index 關係維持一致。
+		pids := make([]int64, len(req.Items))
+		for i, it := range req.Items {
+			pids[i] = it.ProductID
+		}
+		permut := ReorderItemsByModelCode(tx, pids)
+
 		// 預先算 totalQty / totalAmount 與庫存 delta，準備批次插入
-		newItems := make([]models.TransferItem, 0, len(req.Items))
+		newItems := make([]models.TransferItem, 0, len(permut))
 		var deltas []inventory.StockDelta
 
-		for _, reqItem := range req.Items {
+		for newOrder, origIdx := range permut {
+			reqItem := req.Items[origIdx]
 			destCust := destCustomerMap[reqItem.DestStore]
 			totalQty := 0
 			for _, s := range reqItem.Sizes {
@@ -212,7 +222,7 @@ func CreateTransfer(c *gin.Context) {
 				TransferID:     transfer.ID,
 				ProductID:      reqItem.ProductID,
 				SizeGroupID:    reqItem.SizeGroupID,
-				ItemOrder:      reqItem.ItemOrder,
+				ItemOrder:      newOrder,
 				TotalQty:       totalQty,
 				UnitPrice:      reqItem.UnitPrice,
 				TotalAmount:    totalAmount,
@@ -409,9 +419,16 @@ func UpdateTransfer(c *gin.Context) {
 			return err
 		}
 
-		// === 6. 批次重建明細 ===
-		newItems := make([]models.TransferItem, 0, len(req.Items))
-		for _, reqItem := range req.Items {
+		// === 6. 批次重建明細 — 後端依 model_code 自然序重排,忽略前端送的 item_order ===
+		pids := make([]int64, len(req.Items))
+		for i, it := range req.Items {
+			pids[i] = it.ProductID
+		}
+		permut := ReorderItemsByModelCode(tx, pids)
+
+		newItems := make([]models.TransferItem, 0, len(permut))
+		for newOrder, origIdx := range permut {
+			reqItem := req.Items[origIdx]
 			destCust := destCustomerMap[reqItem.DestStore]
 			totalQty := 0
 			for _, s := range reqItem.Sizes {
@@ -422,7 +439,7 @@ func UpdateTransfer(c *gin.Context) {
 				TransferID:     id,
 				ProductID:      reqItem.ProductID,
 				SizeGroupID:    reqItem.SizeGroupID,
-				ItemOrder:      reqItem.ItemOrder,
+				ItemOrder:      newOrder,
 				TotalQty:       totalQty,
 				UnitPrice:      reqItem.UnitPrice,
 				TotalAmount:    totalAmount,
@@ -437,8 +454,9 @@ func UpdateTransfer(c *gin.Context) {
 			}
 		}
 		var newSizes []models.TransferItemSize
-		for i, reqItem := range req.Items {
-			itemID := newItems[i].ID
+		for k, origIdx := range permut {
+			reqItem := req.Items[origIdx]
+			itemID := newItems[k].ID
 			for _, s := range reqItem.Sizes {
 				newSizes = append(newSizes, models.TransferItemSize{
 					TransferItemID: itemID,

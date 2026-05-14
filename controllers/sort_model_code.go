@@ -3,8 +3,11 @@ package controllers
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+
+	"gorm.io/gorm"
 )
 
 // ModelCodeOrderBy returns the comma-separated ORDER BY keys that sort the
@@ -117,6 +120,89 @@ func BuildModelCodeRangeWhere(col, from, to string) (string, []interface{}) {
 		args = append(args, to)
 	}
 	return strings.Join(conds, " AND "), args
+}
+
+// ReorderItemsByModelCode 依 model_code 自然序 (規則同 ModelCodeNaturalLess,
+// 與所有報表類 controller 一致) 對單據明細列重排,回傳「原 index 的排序後 permutation」。
+//
+// 用法:
+//
+//	pids := make([]int64, len(req.Items))
+//	for i, it := range req.Items { pids[i] = it.ProductID }
+//	order := ReorderItemsByModelCode(tx, pids)
+//	for newIdx, origIdx := range order {
+//	    reqItem := req.Items[origIdx]
+//	    // ItemOrder 一律由後端重新指派為 newIdx,前端送的 item_order 忽略
+//	    ...
+//	}
+//
+// 規則:
+//   - 同型號 (productID 相同 或 model_code 相同) → 以原 index 升冪做 stable fallback
+//     (符合 SizeQtyTable「同型號可重複選」的綁定情境,避免被打散)。
+//   - productID == 0 (未選商品) 或 查不到對應 model_code → 視為空字串,排在最後。
+//   - productIDs 為空時回傳 nil。
+func ReorderItemsByModelCode(tx *gorm.DB, productIDs []int64) []int {
+	n := len(productIDs)
+	if n == 0 {
+		return nil
+	}
+	seen := make(map[int64]bool, n)
+	uniq := make([]int64, 0, n)
+	for _, id := range productIDs {
+		if id == 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		uniq = append(uniq, id)
+	}
+	codeMap := make(map[int64]string, len(uniq))
+	if len(uniq) > 0 {
+		var rows []struct {
+			ID        int64
+			ModelCode string
+		}
+		// Unscoped:單據明細的 product_id 理論上不該指向已軟刪商品,保險用
+		_ = tx.Unscoped().Table("products").
+			Select("id, model_code").
+			Where("id IN ?", uniq).
+			Scan(&rows).Error
+		for _, r := range rows {
+			codeMap[r.ID] = r.ModelCode
+		}
+	}
+	return reorderItemsByCodeMap(productIDs, codeMap)
+}
+
+// reorderItemsByCodeMap 是 ReorderItemsByModelCode 抽出的純運算部分,
+// 供單元測試使用(不需 DB,直接給 product_id → model_code 對照)。
+func reorderItemsByCodeMap(productIDs []int64, codeMap map[int64]string) []int {
+	n := len(productIDs)
+	if n == 0 {
+		return nil
+	}
+	idx := make([]int, n)
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.SliceStable(idx, func(a, b int) bool {
+		ia, ib := idx[a], idx[b]
+		ca := codeMap[productIDs[ia]]
+		cb := codeMap[productIDs[ib]]
+		if ca == "" && cb == "" {
+			return ia < ib
+		}
+		if ca == "" {
+			return false
+		}
+		if cb == "" {
+			return true
+		}
+		if ca == cb {
+			return ia < ib
+		}
+		return ModelCodeNaturalLess(ca, cb)
+	})
+	return idx
 }
 
 // MatchModelCodeRange 應用層判斷 code 是否落在 [from, to] 區間內,規則同 BuildModelCodeRangeWhere。

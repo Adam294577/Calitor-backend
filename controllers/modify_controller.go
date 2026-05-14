@@ -162,7 +162,14 @@ func CreateModify(c *gin.Context) {
 
 		var adjustItems []inventory.StockAdjustItem
 
-		for _, reqItem := range req.Items {
+		// 後端依 model_code 自然序重排,忽略前端送的 item_order
+		pids := make([]int64, len(req.Items))
+		for i, it := range req.Items {
+			pids[i] = it.ProductID
+		}
+		permut := ReorderItemsByModelCode(tx, pids)
+		for newOrder, origIdx := range permut {
+			reqItem := req.Items[origIdx]
 			totalQty := 0
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
@@ -172,7 +179,7 @@ func CreateModify(c *gin.Context) {
 				ModifyID:    modify.ID,
 				ProductID:   reqItem.ProductID,
 				SizeGroupID: reqItem.SizeGroupID,
-				ItemOrder:   reqItem.ItemOrder,
+				ItemOrder:   newOrder,
 				TotalQty:    totalQty,
 			}
 			if err := tx.Create(&item).Error; err != nil {
@@ -249,6 +256,20 @@ func UpdateModify(c *gin.Context) {
 	if aid, ok := adminId.(float64); ok {
 		recorderID = int64(aid)
 	}
+
+	// 後端依 model_code 自然序重排,忽略前端送的 item_order
+	pids := make([]int64, len(req.Items))
+	for i, it := range req.Items {
+		pids[i] = it.ProductID
+	}
+	permut := ReorderItemsByModelCode(db.GetRead(), pids)
+	sortedItems := make([]modifySvc.UpdateItem, len(permut))
+	for newOrder, origIdx := range permut {
+		item := req.Items[origIdx]
+		item.ItemOrder = newOrder
+		sortedItems[newOrder] = item
+	}
+	req.Items = sortedItems
 
 	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
 		return modifySvc.Update(tx, id, req, recorderID)

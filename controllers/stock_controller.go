@@ -302,7 +302,14 @@ func CreateStock(c *gin.Context) {
 		if err := tx.Create(&stock).Error; err != nil {
 			return err
 		}
-		for _, reqItem := range req.Items {
+		// 後端依 model_code 自然序重排,忽略前端送的 item_order
+		pids := make([]int64, len(req.Items))
+		for i, it := range req.Items {
+			pids[i] = it.ProductID
+		}
+		permut := ReorderItemsByModelCode(tx, pids)
+		for newOrder, origIdx := range permut {
+			reqItem := req.Items[origIdx]
 			totalQty := 0
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
@@ -314,7 +321,7 @@ func CreateStock(c *gin.Context) {
 				ProductID:      reqItem.ProductID,
 				SizeGroupID:    reqItem.SizeGroupID,
 				PurchaseItemID: reqItem.PurchaseItemID,
-				ItemOrder:      reqItem.ItemOrder,
+				ItemOrder:      newOrder,
 				AdvicePrice:    reqItem.AdvicePrice,
 				Discount:       reqItem.Discount,
 				PurchasePrice:  reqItem.PurchasePrice,
@@ -551,8 +558,14 @@ func UpdateStock(c *gin.Context) {
 			return err
 		}
 
-		// 重建 Items + Sizes
-		for _, reqItem := range req.Items {
+		// 重建 Items + Sizes — 後端依 model_code 自然序重排,忽略前端 item_order
+		pids := make([]int64, len(req.Items))
+		for i, it := range req.Items {
+			pids[i] = it.ProductID
+		}
+		permut := ReorderItemsByModelCode(tx, pids)
+		for newOrder, origIdx := range permut {
+			reqItem := req.Items[origIdx]
 			totalQty := 0
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
@@ -564,7 +577,7 @@ func UpdateStock(c *gin.Context) {
 				ProductID:      reqItem.ProductID,
 				SizeGroupID:    reqItem.SizeGroupID,
 				PurchaseItemID: reqItem.PurchaseItemID,
-				ItemOrder:      reqItem.ItemOrder,
+				ItemOrder:      newOrder,
 				AdvicePrice:    reqItem.AdvicePrice,
 				Discount:       reqItem.Discount,
 				PurchasePrice:  reqItem.PurchasePrice,

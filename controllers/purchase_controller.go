@@ -329,7 +329,14 @@ func CreatePurchase(c *gin.Context) {
 		if err := tx.Create(&purchase).Error; err != nil {
 			return err
 		}
-		for _, reqItem := range req.Items {
+		// 後端依 model_code 自然序重排,忽略前端送的 item_order
+		pids := make([]int64, len(req.Items))
+		for i, it := range req.Items {
+			pids[i] = it.ProductID
+		}
+		order := ReorderItemsByModelCode(tx, pids)
+		for newOrder, origIdx := range order {
+			reqItem := req.Items[origIdx]
 			totalQty := 0
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
@@ -345,7 +352,7 @@ func CreatePurchase(c *gin.Context) {
 				PurchaseID:    purchase.ID,
 				ProductID:     reqItem.ProductID,
 				SizeGroupID:   reqItem.SizeGroupID,
-				ItemOrder:     reqItem.ItemOrder,
+				ItemOrder:     newOrder,
 				AdvicePrice:   reqItem.AdvicePrice,
 				Discount:      reqItem.Discount,
 				PurchasePrice: reqItem.PurchasePrice,
@@ -482,8 +489,14 @@ func UpdatePurchase(c *gin.Context) {
 			return err
 		}
 
-		// 重建 Items + Sizes
-		for _, reqItem := range req.Items {
+		// 重建 Items + Sizes — 後端依 model_code 自然序重排,忽略前端 item_order
+		pids := make([]int64, len(req.Items))
+		for i, it := range req.Items {
+			pids[i] = it.ProductID
+		}
+		order := ReorderItemsByModelCode(tx, pids)
+		for newOrder, origIdx := range order {
+			reqItem := req.Items[origIdx]
 			totalQty := 0
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
@@ -499,7 +512,7 @@ func UpdatePurchase(c *gin.Context) {
 				PurchaseID:    id,
 				ProductID:     reqItem.ProductID,
 				SizeGroupID:   reqItem.SizeGroupID,
-				ItemOrder:     reqItem.ItemOrder,
+				ItemOrder:     newOrder,
 				AdvicePrice:   reqItem.AdvicePrice,
 				Discount:      reqItem.Discount,
 				PurchasePrice: reqItem.PurchasePrice,

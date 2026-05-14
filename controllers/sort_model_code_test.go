@@ -140,6 +140,58 @@ func TestModelCodeNaturalLess_NumericSegments(t *testing.T) {
 	}
 }
 
+// === ReorderItemsByModelCode (純運算部分) ===
+
+func TestReorderItemsByCodeMap_NaturalSort(t *testing.T) {
+	// 三個不同型號亂序輸入,應依自然序排出
+	productIDs := []int64{1, 2, 3}
+	codeMap := map[int64]string{
+		1: "GB8210-01",
+		2: "GB8019-15",
+		3: "N1843W-15",
+	}
+	got := reorderItemsByCodeMap(productIDs, codeMap)
+	want := []int{1, 0, 2} // 對應 GB8019-15, GB8210-01, N1843W-15
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("permutation got %v, want %v", got, want)
+	}
+}
+
+func TestReorderItemsByCodeMap_StableForSameProduct(t *testing.T) {
+	// 同 product_id 出現多次:保留前後輸入順序(stable)
+	productIDs := []int64{1, 2, 1, 2}
+	codeMap := map[int64]string{
+		1: "GB8019-15",
+		2: "GB8210-01",
+	}
+	got := reorderItemsByCodeMap(productIDs, codeMap)
+	want := []int{0, 2, 1, 3} // 兩個 GB8019-15(idx 0,2)在前、兩個 GB8210-01(idx 1,3)在後
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("permutation got %v, want %v", got, want)
+	}
+}
+
+func TestReorderItemsByCodeMap_EmptyProductGoesLast(t *testing.T) {
+	// productID 為 0 或查不到 model_code 的列,排到最後
+	productIDs := []int64{1, 0, 2, 99}
+	codeMap := map[int64]string{
+		1: "GB8019-15",
+		2: "GB8210-01",
+		// 99 沒有對應
+	}
+	got := reorderItemsByCodeMap(productIDs, codeMap)
+	want := []int{0, 2, 1, 3} // GB8019-15(0), GB8210-01(2), then空字串照原序(1, 3)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("permutation got %v, want %v", got, want)
+	}
+}
+
+func TestReorderItemsByCodeMap_Empty(t *testing.T) {
+	if got := reorderItemsByCodeMap(nil, nil); got != nil {
+		t.Errorf("expected nil for empty input, got %v", got)
+	}
+}
+
 func TestModelCodeNaturalLess_SortIntegration(t *testing.T) {
 	codes := []string{
 		"N1843W-15",

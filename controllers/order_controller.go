@@ -282,7 +282,14 @@ func CreateOrder(c *gin.Context) {
 		if err := tx.Create(&order).Error; err != nil {
 			return err
 		}
-		for _, reqItem := range req.Items {
+		// 後端依 model_code 自然序重排,忽略前端送的 item_order
+		pids := make([]int64, len(req.Items))
+		for i, it := range req.Items {
+			pids[i] = it.ProductID
+		}
+		orderIdx := ReorderItemsByModelCode(tx, pids)
+		for newOrder, origIdx := range orderIdx {
+			reqItem := req.Items[origIdx]
 			totalQty := 0
 			for _, s := range reqItem.Sizes {
 				totalQty += s.Qty
@@ -293,7 +300,7 @@ func CreateOrder(c *gin.Context) {
 				OrderID:      order.ID,
 				ProductID:    reqItem.ProductID,
 				SizeGroupID:  reqItem.SizeGroupID,
-				ItemOrder:    reqItem.ItemOrder,
+				ItemOrder:    newOrder,
 				AdvicePrice:  reqItem.AdvicePrice,
 				Discount:     reqItem.Discount,
 				OrderPrice:   reqItem.OrderPrice,
@@ -471,7 +478,45 @@ func UpdateOrder(c *gin.Context) {
 			return err
 		}
 
-		for _, reqItem := range req.Items {
+		// 後端依 model_code 自然序對「未停貨明細 + 已停貨明細」整批重排,
+		// 忽略前端送的 item_order。已停貨明細不重建,但 item_order 也跟著更新到新位置,
+		// 避免讀回時與報表自然序不一致。
+		type sortRow struct {
+			productID  int64
+			isStopped  bool
+			stoppedIdx int
+			activeIdx  int
+		}
+		sortRows := make([]sortRow, 0, len(stoppedItems)+len(req.Items))
+		for i, si := range stoppedItems {
+			sortRows = append(sortRows, sortRow{productID: si.ProductID, isStopped: true, stoppedIdx: i, activeIdx: -1})
+		}
+		for i, ri := range req.Items {
+			if stoppedProductIDs[ri.ProductID] {
+				continue
+			}
+			sortRows = append(sortRows, sortRow{productID: ri.ProductID, isStopped: false, stoppedIdx: -1, activeIdx: i})
+		}
+		pids := make([]int64, len(sortRows))
+		for i, sr := range sortRows {
+			pids[i] = sr.productID
+		}
+		permut := ReorderItemsByModelCode(tx, pids)
+		newOrderByActiveIdx := make(map[int]int, len(req.Items))
+		for newOrder, origIdx := range permut {
+			sr := sortRows[origIdx]
+			if sr.isStopped {
+				if err := tx.Model(&models.OrderItem{}).
+					Where("id = ?", stoppedItems[sr.stoppedIdx].ID).
+					Update("item_order", newOrder).Error; err != nil {
+					return err
+				}
+			} else {
+				newOrderByActiveIdx[sr.activeIdx] = newOrder
+			}
+		}
+
+		for activeIdx, reqItem := range req.Items {
 			// 跳過已停貨的明細（由 DB 保留原始資料）
 			if stoppedProductIDs[reqItem.ProductID] {
 				continue
@@ -487,7 +532,7 @@ func UpdateOrder(c *gin.Context) {
 				OrderID:      id,
 				ProductID:    reqItem.ProductID,
 				SizeGroupID:  reqItem.SizeGroupID,
-				ItemOrder:    reqItem.ItemOrder,
+				ItemOrder:    newOrderByActiveIdx[activeIdx],
 				AdvicePrice:  reqItem.AdvicePrice,
 				Discount:     reqItem.Discount,
 				OrderPrice:   reqItem.OrderPrice,
