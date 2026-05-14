@@ -76,8 +76,23 @@ func GetStockRecords(c *gin.Context) {
 		}
 		return out
 	}
-	customerIDs := parseIDs(c.QueryArray("customer_id"))
-	brandIDs := parseIDs(c.QueryArray("brand_id"))
+	// 多選參數同時接 3 種前端送法:
+	//   ?customer_id=1&customer_id=2        (axios 部分版本 / Gin 標準)
+	//   ?customer_id[]=1&customer_id[]=2    (axios 1.x 預設 array serializer)
+	//   ?customer_id=1,2                    (前端 .join(','))
+	readIDList := func(name string) []int64 {
+		strs := c.QueryArray(name)
+		if len(strs) == 0 {
+			strs = c.QueryArray(name + "[]")
+		}
+		// 若僅一筆且含逗號 → 拆開
+		if len(strs) == 1 && strings.Contains(strs[0], ",") {
+			strs = strings.Split(strs[0], ",")
+		}
+		return parseIDs(strs)
+	}
+	customerIDs := readIDList("customer_id")
+	brandIDs := readIDList("brand_id")
 
 	// 共用 query：stock_items + 關聯表的 INNER JOIN
 	// 保留 retail_customers.is_visible = true,避免隱藏庫點外洩
@@ -98,7 +113,17 @@ func GetStockRecords(c *gin.Context) {
 		baseQuery = baseQuery.Where("stocks.customer_id IN ?", customerIDs)
 	}
 	if len(brandIDs) > 0 {
-		baseQuery = baseQuery.Where("products.brand_id IN ?", brandIDs)
+		// 部分舊資料 products.brand_id 為 NULL 但 billing_brand 字串(對應 brands.code)有值,
+		// 也要被 brand 過濾打到。先撈出選中 brand 的 code,做 OR 比對。
+		var brandCodes []string
+		db.GetRead().Model(&models.Brand{}).
+			Where("id IN ?", brandIDs).
+			Pluck("code", &brandCodes)
+		if len(brandCodes) > 0 {
+			baseQuery = baseQuery.Where("products.brand_id IN ? OR products.billing_brand IN ?", brandIDs, brandCodes)
+		} else {
+			baseQuery = baseQuery.Where("products.brand_id IN ?", brandIDs)
+		}
 	}
 	if frag, fargs := BuildModelCodeRangeWhere("products.model_code", modelCodeFrom, modelCodeTo); frag != "" {
 		baseQuery = baseQuery.Where(frag, fargs...)
