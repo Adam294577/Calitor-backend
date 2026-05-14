@@ -19,7 +19,10 @@ import (
 //   - Key1: 第 1 欄(代號/型號/品牌名稱)
 //   - Key2: 第 2 欄(名稱/類別)
 //   - 應售金額 = 商品批價(WholesaleTaxIncl,含稅) × qty
-//   - 實售金額 = retail_sell_items.total_amount + shipment_items.total_amount
+//   - 實售金額 = retail_sell_items.cash_amount + retail_sell_items.card_amount
+//                + shipment_items.total_amount(含稅)
+//     ※ 零售端取「實際收到」的收現+刷卡(不含禮券),不是 total_amount × (1+稅率),
+//        否則贈品/折扣讓利/禮券抵扣的部分會被當成有實收。
 //   - 銷售成本 = 該商品「最近一筆」進貨 stock_items.purchase_price × qty
 //   - 銷售毛利 = 實售 − 成本
 //   - 毛利率 % = 毛利 / 實售 × 100
@@ -119,10 +122,12 @@ func GetProductSalesStats(c *gin.Context) {
 	// 顯示分店名稱另外用 customer.code = store_code 反查 (因為 customer.code 是 unique,branch_code 不是)。
 	if txType == "all" || txType == "sell" {
 		// 明細金額一律存正數；sell_mode=2(退貨) 在統計時 *-1
+		// 實售金額用實際收到的 cash_amount + card_amount(不含禮券),不用 total_amount × 稅率,
+		// 因為贈品/退讓/禮券抵扣會讓 total_amount 與實收脫鉤。
 		sellSQL := `
             SELECT rsi.product_id,
                    CASE WHEN rsi.sell_mode = 2 THEN -rsi.total_qty ELSE rsi.total_qty END AS qty,
-                   CASE WHEN rsi.sell_mode = 2 THEN -1 ELSE 1 END * rsi.total_amount * (1 + COALESCE(rs.tax_rate, 0) / 100.0) AS actual_amt,
+                   CASE WHEN rsi.sell_mode = 2 THEN -1 ELSE 1 END * (COALESCE(rsi.cash_amount, 0) + COALESCE(rsi.card_amount, 0)) AS actual_amt,
                    COALESCE(rs.sell_store, '') AS store_code
             FROM retail_sell_items rsi
             JOIN retail_sells rs ON rs.id = rsi.retail_sell_id
