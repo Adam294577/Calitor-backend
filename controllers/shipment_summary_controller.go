@@ -58,6 +58,8 @@ func GetShipmentSummary(c *gin.Context) {
 	salesmanIDs := c.QueryArray("salesman_id")
 	modelCodeFrom := c.Query("model_code_from")
 	modelCodeTo := c.Query("model_code_to")
+	brandCodeFrom := strings.TrimSpace(c.Query("brand_code_from"))
+	brandCodeTo := strings.TrimSpace(c.Query("brand_code_to"))
 	brandIDStrs := c.QueryArray("brand_id")
 	shipModeStr := c.Query("ship_mode")    // "" | "3" | "4"
 	supplementStr := c.Query("supplement") // "" | "1" | "2"
@@ -134,10 +136,19 @@ func GetShipmentSummary(c *gin.Context) {
 		}
 		whereParts = append(whereParts, "products.brand_id IN ("+strings.Join(bs, ",")+")")
 	}
+	// 商品品牌區間(product_brands.code) — 與既有 brand_id(對帳品牌)分屬不同體系
+	if brandFrag, brandArgs := BuildModelCodeRangeWhere("product_brands.code", brandCodeFrom, brandCodeTo); brandFrag != "" {
+		whereParts = append(whereParts, brandFrag)
+		whereArgs = append(whereArgs, brandArgs...)
+	}
 
-	const joinClause = `JOIN retail_customers ON retail_customers.id = shipments.customer_id AND retail_customers.is_visible = true AND retail_customers.deleted_at IS NULL
+	joinClause := `JOIN retail_customers ON retail_customers.id = shipments.customer_id AND retail_customers.is_visible = true AND retail_customers.deleted_at IS NULL
 		JOIN shipment_items ON shipment_items.shipment_id = shipments.id
 		JOIN products ON products.id = shipment_items.product_id AND products.deleted_at IS NULL`
+	// 條件式 JOIN product_brands:只有當品牌區間有值時才 JOIN,避免拖慢預設查詢
+	if brandCodeFrom != "" || brandCodeTo != "" {
+		joinClause += "\n\t\tLEFT JOIN product_brands ON product_brands.id = products.product_brand_id"
+	}
 
 	// ===== summary tab:DB 端 GROUP BY,只回傳 group rows,避免 50k+ 列轉到 app 端 =====
 	if tab != "detail" {
@@ -146,12 +157,15 @@ func GetShipmentSummary(c *gin.Context) {
 	}
 
 	baseQuery := func() *gorm.DB {
-		return db.GetRead().
+		q := db.GetRead().
 			Table("shipments").
 			Joins("JOIN retail_customers ON retail_customers.id = shipments.customer_id AND retail_customers.is_visible = true AND retail_customers.deleted_at IS NULL").
 			Joins("JOIN shipment_items ON shipment_items.shipment_id = shipments.id").
-			Joins("JOIN products ON products.id = shipment_items.product_id AND products.deleted_at IS NULL").
-			Where(strings.Join(whereParts, " AND "), whereArgs...)
+			Joins("JOIN products ON products.id = shipment_items.product_id AND products.deleted_at IS NULL")
+		if brandCodeFrom != "" || brandCodeTo != "" {
+			q = q.Joins("LEFT JOIN product_brands ON product_brands.id = products.product_brand_id")
+		}
+		return q.Where(strings.Join(whereParts, " AND "), whereArgs...)
 	}
 
 	// ===== detail tab:攤平所有 shipment_items,Go 端逐列附帶成本 =====

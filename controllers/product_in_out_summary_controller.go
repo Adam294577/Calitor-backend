@@ -59,6 +59,13 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 		where += " AND " + frag
 		args = append(args, fargs...)
 	}
+	// 商品品牌區間(product_brands.code) — 與既有 brand_ids(對帳品牌)分屬不同體系
+	brandCodeFrom := strings.TrimSpace(c.Query("brand_code_from"))
+	brandCodeTo := strings.TrimSpace(c.Query("brand_code_to"))
+	if frag, fargs := BuildModelCodeRangeWhere("pb.code", brandCodeFrom, brandCodeTo); frag != "" {
+		where += " AND " + frag
+		args = append(args, fargs...)
+	}
 	if v := c.Query("brand_ids"); v != "" {
 		ids := splitNonEmpty(v)
 		if len(ids) > 0 {
@@ -192,6 +199,12 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 		}
 	}
 
+	// 條件式 JOIN product_brands:只有當品牌區間有值時才 JOIN,避免拖慢預設查詢
+	extraJoin := ""
+	if brandCodeFrom != "" || brandCodeTo != "" {
+		extraJoin = "LEFT JOIN product_brands pb ON pb.id = p.product_brand_id"
+	}
+
 	sql := fmt.Sprintf(`
 SELECT
   p.id,
@@ -207,8 +220,9 @@ LEFT JOIN size_groups sg ON sg.id = p.size1_group_id
 LEFT JOIN product_vendors pv ON pv.product_id = p.id AND pv.is_primary = true
 LEFT JOIN vendors v ON v.id = pv.vendor_id
 %s
+%s
 ORDER BY %s
-`, where, ModelCodeOrderBy("p.model_code"))
+`, extraJoin, where, ModelCodeOrderBy("p.model_code"))
 
 	var rows []productSummaryRow
 	if err := db.GetRead().Raw(sql, args...).Scan(&rows).Error; err != nil {

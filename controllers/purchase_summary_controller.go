@@ -6,6 +6,7 @@ import (
 	response "project/services/responses"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -46,6 +47,8 @@ func GetPurchaseSummary(c *gin.Context) {
 	vendorIDs := c.QueryArray("vendor_id")
 	modelCodeFrom := c.Query("model_code_from")
 	modelCodeTo := c.Query("model_code_to")
+	brandCodeFrom := strings.TrimSpace(c.Query("brand_code_from"))
+	brandCodeTo := strings.TrimSpace(c.Query("brand_code_to"))
 	brandIDStrs := c.QueryArray("product_brand_id")
 	dealModeStr := c.Query("deal_mode") // "" | "1" | "2"
 
@@ -79,17 +82,22 @@ func GetPurchaseSummary(c *gin.Context) {
 		query = query.Where("purchases.deal_mode = ?", dealModeStr)
 	}
 
-	// 明細層過濾：型號 / 品牌（cancel_flag=1 排除停交 line）
+	// 明細層過濾：型號 / 品牌(product_brand_id 多選) / 商品品牌區間(product_brands.code) — cancel_flag=1 排除停交 line
 	modelFrag, modelArgs := BuildModelCodeRangeWhere("products.model_code", modelCodeFrom, modelCodeTo)
+	brandFrag, brandArgs := BuildModelCodeRangeWhere("product_brands.code", brandCodeFrom, brandCodeTo)
 	applyItemFilter := func(q *gorm.DB) *gorm.DB {
 		q = q.Where("purchase_items.cancel_flag = ?", 1)
-		if modelFrag != "" || len(brandIDs) > 0 {
+		if modelFrag != "" || len(brandIDs) > 0 || brandFrag != "" {
 			q = q.Joins("JOIN products ON products.id = purchase_items.product_id")
 			if modelFrag != "" {
 				q = q.Where(modelFrag, modelArgs...)
 			}
 			if len(brandIDs) > 0 {
 				q = q.Where("products.product_brand_id IN ?", brandIDs)
+			}
+			if brandFrag != "" {
+				q = q.Joins("LEFT JOIN product_brands ON product_brands.id = products.product_brand_id")
+				q = q.Where(brandFrag, brandArgs...)
 			}
 		}
 		return q

@@ -18,6 +18,11 @@ type stockRecordSizeOpt struct {
 	SortOrder int    `json:"sort_order"`
 }
 
+// stockRecordFooter 進貨紀錄查詢 — 跨全部符合條件的合計
+type stockRecordFooter struct {
+	TotalQty int `json:"total_qty"`
+}
+
 // stockRecordRow 進貨紀錄查詢 — 一行 = 一筆 StockItem
 // 尺碼以 inventory.vue 的「固定格子」格式回傳:
 //   - SizeOptions：本列實際 size_group 的完整選項列(依 sort_order)
@@ -135,6 +140,16 @@ func GetStockRecords(c *gin.Context) {
 	// 總筆數（Session 隔離,後面還會用同一條 baseQuery 撈 page 資料）
 	var total int64
 	if err := baseQuery.Session(&gorm.Session{}).Count(&total).Error; err != nil {
+		resp.Panic(err).Send()
+		return
+	}
+
+	// 跨「全部符合條件」的合計(不受分頁影響),前端 tfoot 顯示
+	var footer stockRecordFooter
+	if err := baseQuery.Session(&gorm.Session{}).
+		Joins("LEFT JOIN stock_item_sizes ON stock_item_sizes.stock_item_id = stock_items.id").
+		Select("COALESCE(SUM(stock_item_sizes.qty), 0) AS total_qty").
+		Scan(&footer).Error; err != nil {
 		resp.Panic(err).Send()
 		return
 	}
@@ -304,5 +319,8 @@ func GetStockRecords(c *gin.Context) {
 		}
 	}
 
-	resp.Success("成功").SetData(rows).SetTotal(total).Send()
+	resp.Success("成功").SetData(map[string]interface{}{
+		"rows":   rows,
+		"footer": footer,
+	}).SetTotal(total).Send()
 }

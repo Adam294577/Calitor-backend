@@ -51,6 +51,8 @@ func GetOrderSummary(c *gin.Context) {
 	salesmanIDs := c.QueryArray("salesman_id")
 	modelCodeFrom := c.Query("model_code_from")
 	modelCodeTo := c.Query("model_code_to")
+	brandCodeFrom := strings.TrimSpace(c.Query("brand_code_from"))
+	brandCodeTo := strings.TrimSpace(c.Query("brand_code_to"))
 	brandIDStrs := c.QueryArray("brand_id")
 	supplementStr := c.Query("supplement") // "" | "1" | "2"
 	dealModeStr := c.Query("deal_mode")    // "" | "1" | "2"
@@ -102,20 +104,25 @@ func GetOrderSummary(c *gin.Context) {
 		query = query.Where("orders.remark ILIKE ?", "%"+remark+"%")
 	}
 
-	// 明細層過濾：舖補 / 型號 / 品牌 + 排除已清除/停 (cancel_flag NOT IN (2,3))
+	// 明細層過濾：舖補 / 型號 / 品牌(對帳品牌 brand_id 多選) / 商品品牌區間(product_brands.code) + 排除已清除/停 (cancel_flag NOT IN (2,3))
 	modelFrag, modelArgs := BuildModelCodeRangeWhere("products.model_code", modelCodeFrom, modelCodeTo)
+	brandFrag, brandArgs := BuildModelCodeRangeWhere("product_brands.code", brandCodeFrom, brandCodeTo)
 	applyItemFilter := func(q *gorm.DB) *gorm.DB {
 		q = q.Where("order_items.cancel_flag NOT IN (?)", []int{2, 3})
 		if supplementStr == "1" || supplementStr == "2" {
 			q = q.Where("order_items.supplement = ?", supplementStr)
 		}
-		if modelFrag != "" || len(brandIDs) > 0 {
+		if modelFrag != "" || len(brandIDs) > 0 || brandFrag != "" {
 			q = q.Joins("JOIN products ON products.id = order_items.product_id")
 			if modelFrag != "" {
 				q = q.Where(modelFrag, modelArgs...)
 			}
 			if len(brandIDs) > 0 {
 				q = q.Where("products.brand_id IN ?", brandIDs)
+			}
+			if brandFrag != "" {
+				q = q.Joins("LEFT JOIN product_brands ON product_brands.id = products.product_brand_id")
+				q = q.Where(brandFrag, brandArgs...)
 			}
 		}
 		return q
