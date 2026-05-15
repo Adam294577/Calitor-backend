@@ -375,7 +375,8 @@ GROUP BY pss.product_id, pss.size_option_id
 		totalSQL := fmt.Sprintf(`
 SELECT si.product_id,
        COALESCE(SUM(CASE WHEN si.sell_mode = 2 THEN -si.total_qty ELSE si.total_qty END),0) AS qty,
-       COALESCE(SUM(CASE WHEN si.sell_mode = 2 THEN -si.total_amount ELSE si.total_amount END),0) AS amount
+       COALESCE(SUM(CASE WHEN si.sell_mode = 2 THEN -1 ELSE 1 END
+                    * (COALESCE(si.cash_amount, 0) + COALESCE(si.card_amount, 0))),0) AS amount
 FROM retail_sells s
 JOIN retail_sell_items si ON si.retail_sell_id = s.id
 %s
