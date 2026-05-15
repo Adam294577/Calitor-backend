@@ -184,7 +184,8 @@ func GetProductInOutSummaryProducts(c *gin.Context) {
 			}
 		}
 		if hasInventory {
-			invExists := "EXISTS (SELECT 1 FROM product_size_stocks pss WHERE pss.product_id = p.id AND pss.qty != 0"
+			// 已隱藏客戶(is_visible = false)視同軟刪除,庫存不應計入 — 與 inventory_controller 同一規則
+			invExists := "EXISTS (SELECT 1 FROM product_size_stocks pss JOIN retail_customers rc ON rc.id = pss.customer_id AND rc.is_visible = true WHERE pss.product_id = p.id AND pss.qty != 0"
 			if len(customerIDs) > 0 {
 				invExists += " AND pss.customer_id IN (" + placeholders(len(customerIDs)) + ")"
 				for _, id := range customerIDs {
@@ -930,7 +931,8 @@ ORDER BY p.purchase_date, p.id
 // 不套用日期區間（庫存是即時值）；branch_ids 仍生效。
 // 透過將 customer_id 塞入 rawSizeRow.HeaderID 作為分桶 key，重用 aggregateBySizes 取得「一庫點一列」。
 func queryInventoryRows(db *models.DBManager, productID string, branchIDs []string) ([]detailRow, error) {
-	where := "WHERE p.deleted_at IS NULL AND pss.qty != 0 AND pss.product_id = ?"
+	// rc.is_visible = true:已隱藏客戶視同軟刪除,庫存不列出
+	where := "WHERE p.deleted_at IS NULL AND rc.is_visible = true AND pss.qty != 0 AND pss.product_id = ?"
 	args := []interface{}{productID}
 	if len(branchIDs) > 0 {
 		where += " AND pss.customer_id IN (" + placeholders(len(branchIDs)) + ")"
