@@ -16,7 +16,7 @@ type RetailSell struct {
 	SellDate     string          `gorm:"type:varchar(20);not null;index" json:"sell_date"`
 	CustomerID   int64           `gorm:"not null;index" json:"customer_id"`
 	Customer     *RetailCustomer `gorm:"foreignKey:CustomerID" json:"customer,omitempty"`
-	SellStore    string          `gorm:"type:varchar(20)" json:"sell_store"` // 分店=庫點 (branch_code)
+	SellStore    string          `gorm:"type:varchar(20)" json:"sell_store"` // 分店=庫點 (customer.code,非 branch_code)
 	SellPersonID *int64          `gorm:"index" json:"sell_person_id"`
 	SellPerson   *Admin          `gorm:"foreignKey:SellPersonID" json:"sell_person,omitempty"`
 	RecorderID   int64           `gorm:"not null;index" json:"recorder_id"`

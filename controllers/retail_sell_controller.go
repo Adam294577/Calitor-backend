@@ -113,7 +113,7 @@ func GetRetailSell(c *gin.Context) {
 		Preload("Items.Sizes.SizeOption").
 		Preload("Items.Member")
 	if sellStore != "" {
-		query = query.Preload("Items.Product.SizeStocks", "customer_id IN (SELECT id FROM retail_customers WHERE branch_code = ?)", sellStore)
+		query = query.Preload("Items.Product.SizeStocks", "customer_id IN (SELECT id FROM retail_customers WHERE code = ?)", sellStore)
 	} else {
 		query = query.Preload("Items.Product.SizeStocks")
 	}
@@ -178,7 +178,7 @@ func CreateRetailSell(c *gin.Context) {
 		return
 	}
 
-	// 查詢客戶取 branch_code(同時驗證 is_visible)
+	// 查詢客戶取 code/branch_code(同時驗證 is_visible)
 	customerPtr, cerr := EnsureCustomerVisible(db.GetRead(), req.CustomerID)
 	if cerr != nil {
 		resp.Fail(http.StatusBadRequest, ErrMsgCustomerNotVisible).Send()
@@ -186,17 +186,15 @@ func CreateRetailSell(c *gin.Context) {
 	}
 	customer := *customerPtr
 
-	sellStore := req.SellStore
-	if sellStore == "" {
-		sellStore = customer.BranchCode
-	}
+	// sell_store 永遠存 customer.code(歷史慣例,亦為商品進出簡表報表 join 依據)。
+	sellStore := customer.Code
 
-	// 產生單號: {BranchID}{YYYYMMDD}{流水號3碼}
+	// 產生單號: {BranchCode}{YYYYMMDD}{流水號3碼}
 	yyyymmdd := req.SellDate
 	if len(yyyymmdd) > 8 {
 		yyyymmdd = yyyymmdd[:8]
 	}
-	noPrefix := sellStore + yyyymmdd
+	noPrefix := customer.BranchCode + yyyymmdd
 
 	var maxNo string
 	db.GetRead().Unscoped().Model(&models.RetailSell{}).
@@ -319,7 +317,7 @@ func CreateRetailSell(c *gin.Context) {
 		// 調整庫存：銷貨/贈品扣庫存，退貨加庫存
 		var storeCustomer models.RetailCustomer
 		if sellStore != "" {
-			if err := tx.Where("branch_code = ?", sellStore).First(&storeCustomer).Error; err != nil && err != gorm.ErrRecordNotFound {
+			if err := tx.Where("code = ?", sellStore).First(&storeCustomer).Error; err != nil && err != gorm.ErrRecordNotFound {
 				return err
 			}
 		}
@@ -414,18 +412,23 @@ func UpdateRetailSell(c *gin.Context) {
 		return
 	}
 
+	// sell_store 永遠由 customer.code 派生 (歷史慣例,亦為商品進出簡表 join 依據)。
+	// 取 req.CustomerID 對應的 customer.Code；若未帶 customer_id,沿用 existing.SellStore。
+	newSellStore := existing.SellStore
 	if req.CustomerID != 0 {
-		if _, verr := EnsureCustomerVisible(db.GetRead(), req.CustomerID); verr != nil {
+		customerPtr, verr := EnsureCustomerVisible(db.GetRead(), req.CustomerID)
+		if verr != nil {
 			resp.Fail(http.StatusBadRequest, ErrMsgCustomerNotVisible).Send()
 			return
 		}
+		newSellStore = customerPtr.Code
 	}
 
 	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
 		// 還原舊庫存
 		var storeCustomerOld models.RetailCustomer
 		if existing.SellStore != "" {
-			if err := tx.Where("branch_code = ?", existing.SellStore).First(&storeCustomerOld).Error; err != nil && err != gorm.ErrRecordNotFound {
+			if err := tx.Where("code = ?", existing.SellStore).First(&storeCustomerOld).Error; err != nil && err != gorm.ErrRecordNotFound {
 				return err
 			}
 		}
@@ -476,7 +479,7 @@ func UpdateRetailSell(c *gin.Context) {
 		updates := map[string]interface{}{
 			"sell_date":      req.SellDate,
 			"customer_id":    req.CustomerID,
-			"sell_store":     req.SellStore,
+			"sell_store":     newSellStore,
 			"sell_person_id": req.SellPersonID,
 			"tax_rate":       req.TaxRate,
 			"tax_id":         req.TaxID,
@@ -564,8 +567,8 @@ func UpdateRetailSell(c *gin.Context) {
 
 		// 套用新庫存
 		var storeCustomerNew models.RetailCustomer
-		if req.SellStore != "" {
-			if err := tx.Where("branch_code = ?", req.SellStore).First(&storeCustomerNew).Error; err != nil && err != gorm.ErrRecordNotFound {
+		if newSellStore != "" {
+			if err := tx.Where("code = ?", newSellStore).First(&storeCustomerNew).Error; err != nil && err != gorm.ErrRecordNotFound {
 				return err
 			}
 		}
@@ -626,7 +629,7 @@ func DeleteRetailSell(c *gin.Context) {
 		// 還原庫存
 		var storeCustomer models.RetailCustomer
 		if sell.SellStore != "" {
-			if err := tx.Where("branch_code = ?", sell.SellStore).First(&storeCustomer).Error; err != nil && err != gorm.ErrRecordNotFound {
+			if err := tx.Where("code = ?", sell.SellStore).First(&storeCustomer).Error; err != nil && err != gorm.ErrRecordNotFound {
 				return err
 			}
 		}
