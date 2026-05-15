@@ -582,7 +582,8 @@ SELECT
   s.sell_date AS doc_date,
   COALESCE(s.sell_store, '') AS branch_code,
   COALESCE(NULLIF(branch.short_name, ''), branch.name, '') AS branch_name,
-  COALESCE(si.sell_price, 0) AS unit_price,
+  CASE WHEN si.sell_mode = 2 THEN -1 ELSE 1 END
+    * (COALESCE(si.cash_amount, 0) + COALESCE(si.card_amount, 0)) AS unit_price,
   '' AS vendor_code,
   COALESCE(NULLIF(rc.short_name, ''), rc.name, '') AS vendor_name,
   TO_CHAR(s.updated_at AT TIME ZONE 'Asia/Taipei', 'YYYYMMDD') AS updated_at,
