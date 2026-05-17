@@ -590,9 +590,11 @@ func queryRetailSellRows(db *models.DBManager, productID string, branchCodes, br
 		args = append(args, dateTo)
 	}
 
+	// header_id 以 si.id 分桶:同一張零售單可能含多筆同商品(銷貨+退貨 mix),
+	// 用 s.id 會被 aggregateBySizes 合併成一列,丟失 sell_mode 差異與 unit_price 正負號。
 	sql := fmt.Sprintf(`
 SELECT
-  s.id AS header_id,
+  si.id AS header_id,
   s.sell_no AS doc_no,
   s.sell_date AS doc_date,
   COALESCE(s.sell_store, '') AS branch_code,
@@ -612,7 +614,7 @@ LEFT JOIN retail_customers branch ON branch.code = s.sell_store AND branch.delet
 LEFT JOIN retail_customers rc ON rc.id = s.customer_id
 LEFT JOIN admins a ON a.id = s.recorder_id
 %s
-ORDER BY s.sell_date, s.id
+ORDER BY s.sell_date, s.id, si.id
 `, where)
 
 	var raws []rawSizeRow
