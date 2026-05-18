@@ -114,7 +114,7 @@ func GetInventory(c *gin.Context) {
 		}
 	}
 
-	// 成本 = 商品主檔「主要供應商」的 最後進價 (product_vendors.cost_last)
+	// 成本 = 該商品最新一筆進貨單(stock_mode=1, total_qty>0)的進價,與「客戶出貨統計」對齊。
 	// 批價 = 商品建檔含稅價 (products.wholesale_tax_incl)
 	sql := fmt.Sprintf(`
 SELECT
@@ -125,7 +125,7 @@ SELECT
   COALESCE(NULLIF(rc.short_name, ''), rc.name, '') as customer_short_name,
   COALESCE(sg.id, 0) as size_group_id,
   COALESCE(sg.code, '') as size_group_code,
-  COALESCE(pv.cost_last, 0) as cost_start,
+  COALESCE(latest_cost.purchase_price, 0) as cost_start,
   COALESCE(p.wholesale_tax_incl, 0) as wholesale_tax_incl,
   COALESCE(p.msrp, 0) as msrp,
   COALESCE(TO_CHAR(p.created_on, 'YYYYMMDD'), '') as created_on,
@@ -135,9 +135,19 @@ SELECT
   pss.qty
 FROM product_size_stocks pss
 JOIN products p ON p.id = pss.product_id
-JOIN size_options so ON so.id = pss.size_option_id
+JOIN size_options so ON so.id = pss.size_option_id AND so.size_group_id = p.size1_group_id
 LEFT JOIN size_groups sg ON sg.id = p.size1_group_id
-LEFT JOIN product_vendors pv ON pv.product_id = p.id AND pv.is_primary = true
+LEFT JOIN LATERAL (
+  SELECT si2.purchase_price
+  FROM stock_items si2
+  JOIN stocks s2 ON s2.id = si2.stock_id
+    AND s2.deleted_at IS NULL
+    AND s2.stock_mode = 1
+  WHERE si2.product_id = p.id
+    AND si2.total_qty > 0
+  ORDER BY s2.stock_date DESC, si2.id DESC
+  LIMIT 1
+) latest_cost ON TRUE
 LEFT JOIN retail_customers rc ON rc.id = pss.customer_id
 LEFT JOIN product_brands pb ON pb.id = p.product_brand_id
 %s AND pss.qty != 0

@@ -147,9 +147,14 @@ func GetOrderSummary(c *gin.Context) {
 		return
 	}
 
-	// 收集所有 product_id,批次撈主要供應商成本
+	// 收集所有 product_id 與最大訂單日,批次撈進貨資料用以計算「訂單日(含)以前最近一筆進貨價」。
+	// 與「客戶出貨統計」(shipment_summary_controller) 對齊邏輯,不再讀 product_vendors.cost_last。
 	productIDSet := map[int64]bool{}
+	maxOrderDate := ""
 	for _, o := range orders {
+		if o.OrderDate > maxOrderDate {
+			maxOrderDate = o.OrderDate
+		}
 		for _, item := range o.Items {
 			if item.ProductID > 0 {
 				productIDSet[item.ProductID] = true
@@ -160,13 +165,49 @@ func GetOrderSummary(c *gin.Context) {
 	for id := range productIDSet {
 		productIDs = append(productIDs, id)
 	}
-	costMap := map[int64]float64{}
+	type stockRow struct {
+		ProductID     int64   `gorm:"column:product_id"`
+		StockDate     string  `gorm:"column:stock_date"`
+		PurchasePrice float64 `gorm:"column:purchase_price"`
+	}
+	stocksByProduct := map[int64][]stockRow{}
 	if len(productIDs) > 0 {
-		var pvs []models.ProductVendor
-		db.GetRead().Where("product_id IN ? AND is_primary = ?", productIDs, true).Find(&pvs)
-		for _, pv := range pvs {
-			costMap[pv.ProductID] = pv.CostLast
+		var stockRows []stockRow
+		sq := db.GetRead().
+			Table("stock_items").
+			Select("stock_items.product_id, stocks.stock_date, stock_items.purchase_price").
+			Joins("JOIN stocks ON stocks.id = stock_items.stock_id AND stocks.deleted_at IS NULL AND stocks.stock_mode = 1").
+			Where("stock_items.product_id IN ?", productIDs).
+			Where("stock_items.total_qty > 0")
+		if maxOrderDate != "" {
+			sq = sq.Where("stocks.stock_date <= ?", maxOrderDate)
 		}
+		sq.Find(&stockRows)
+		for _, r := range stockRows {
+			stocksByProduct[r.ProductID] = append(stocksByProduct[r.ProductID], r)
+		}
+		for pid := range stocksByProduct {
+			rows := stocksByProduct[pid]
+			sort.Slice(rows, func(i, j int) bool {
+				return rows[i].StockDate < rows[j].StockDate
+			})
+			stocksByProduct[pid] = rows
+		}
+	}
+	// 回傳訂單日(含)以前最近一筆進貨單的單位進價;無進貨紀錄回 0
+	latestStockPrice := func(productID int64, asOfDate string) float64 {
+		rows := stocksByProduct[productID]
+		if len(rows) == 0 {
+			return 0
+		}
+		price := 0.0
+		for _, r := range rows {
+			if r.StockDate > asOfDate {
+				break
+			}
+			price = r.PurchasePrice
+		}
+		return price
 	}
 
 	type lineEntry struct {
@@ -181,7 +222,7 @@ func GetOrderSummary(c *gin.Context) {
 		unitPrice    float64
 		discount     float64
 		amount       float64 // 未稅 (TotalAmount on OrderItem)
-		cost         float64 // primary vendor cost_last * qty
+		cost         float64 // 訂單日(含)以前最近一筆進貨價 * qty
 		taxAmount    float64
 	}
 
@@ -201,7 +242,7 @@ func GetOrderSummary(c *gin.Context) {
 				continue
 			}
 			amount := math.Round(item.TotalAmount)
-			cost := math.Round(costMap[item.ProductID] * float64(item.TotalQty))
+			cost := math.Round(latestStockPrice(item.ProductID, o.OrderDate) * float64(item.TotalQty))
 			tax := 0.0
 			if o.TaxMode == 2 {
 				tax = math.Round(amount * o.TaxRate / 100)
