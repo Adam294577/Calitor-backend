@@ -537,7 +537,17 @@ func UpdatePurchase(c *gin.Context) {
 				}
 			}
 		}
-		return nil
+		// 編輯介面可能透過「清除」欄把某些 item 改為 cancel_flag=2,需同步重算
+		// is_stopped(全部未停 item 都停才 true)與 delivery_status,
+		// 否則列表「停交」按鈕(綁 is_stopped)disable 不會生效。
+		var activeCount int64
+		if err := tx.Model(&models.PurchaseItem{}).Where("purchase_id = ? AND cancel_flag < 2", id).Count(&activeCount).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&models.Purchase{}).Where("id = ?", id).Update("is_stopped", activeCount == 0).Error; err != nil {
+			return err
+		}
+		return delivery.UpdateDeliveryStatus(tx, id)
 	})
 	if err != nil {
 		resp.Panic(err).Send()
@@ -573,6 +583,55 @@ func StopPurchase(c *gin.Context) {
 
 	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
 		return purchase.Stop(tx, id, recorderID)
+	})
+	if err != nil {
+		resp.Panic(err).Send()
+		return
+	}
+
+	resp.Success("停交成功").Send()
+}
+
+// StopPurchaseItems 逐列停交：只將指定 product_ids 對應的明細 cancel_flag 設為 2
+// 與 StopPurchase 不同：StopPurchase 停整張採購單所有明細；本端點只停指定 product_id 的明細列。
+// 給「採購未交統計」按下停按鈕時使用，避免把採購單裡其他型號一起停掉。
+func StopPurchaseItems(c *gin.Context) {
+	resp := response.New(c)
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		resp.Fail(http.StatusBadRequest, "無效的 ID").Send()
+		return
+	}
+
+	var body struct {
+		ProductIDs []int64 `json:"product_ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		resp.Fail(http.StatusBadRequest, "請求格式錯誤").Send()
+		return
+	}
+	if len(body.ProductIDs) == 0 {
+		resp.Fail(http.StatusBadRequest, "必須指定 product_ids").Send()
+		return
+	}
+
+	db := models.PostgresNew()
+	defer db.Close()
+
+	var existing models.Purchase
+	if err := db.GetRead().Where("id = ?", id).First(&existing).Error; err != nil {
+		resp.Fail(http.StatusNotFound, "採購單不存在").Send()
+		return
+	}
+
+	adminId, _ := c.Get("AdminId")
+	recorderID := existing.RecorderID
+	if aid, ok := adminId.(float64); ok {
+		recorderID = int64(aid)
+	}
+
+	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
+		return purchase.StopItems(tx, id, body.ProductIDs, recorderID)
 	})
 	if err != nil {
 		resp.Panic(err).Send()

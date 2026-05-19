@@ -23,6 +23,33 @@ func Stop(tx *gorm.DB, purchaseID int64, recorderID int64) error {
 	return delivery.UpdateDeliveryStatus(tx, purchaseID)
 }
 
+// StopItems 逐列停交：只將指定 product_ids 對應的明細 cancel_flag 設為 2。
+// 與 Stop 不同：Stop 停整張採購單所有明細；本函式只停指定 product_id 的明細列。
+// 給「採購未交統計」按下停按鈕時使用，避免把採購單裡其他型號一起停掉。
+// is_stopped 旗標會依「剩餘未停 item 數是否為 0」重算（採購單列表頁的停交按鈕綁此旗標 disable）。
+// 呼叫端必須傳入 Transaction 的 tx。recorderID 為 0 時不覆寫原值。
+func StopItems(tx *gorm.DB, purchaseID int64, productIDs []int64, recorderID int64) error {
+	if len(productIDs) == 0 {
+		return nil
+	}
+	if err := tx.Model(&models.PurchaseItem{}).Where("purchase_id = ? AND product_id IN ? AND cancel_flag < 2", purchaseID, productIDs).Update("cancel_flag", 2).Error; err != nil {
+		return err
+	}
+	// 重算 is_stopped：只有「沒有任何未停明細」才視為整單停交
+	var activeCount int64
+	if err := tx.Model(&models.PurchaseItem{}).Where("purchase_id = ? AND cancel_flag < 2", purchaseID).Count(&activeCount).Error; err != nil {
+		return err
+	}
+	updates := map[string]interface{}{"is_stopped": activeCount == 0}
+	if recorderID != 0 {
+		updates["recorder_id"] = recorderID
+	}
+	if err := tx.Model(&models.Purchase{}).Where("id = ?", purchaseID).Updates(updates).Error; err != nil {
+		return err
+	}
+	return delivery.UpdateDeliveryStatus(tx, purchaseID)
+}
+
 // RecentPriceResult 為 RecentPrice 的回傳值，可直接作為 JSON response data。
 type RecentPriceResult struct {
 	PurchasePrice float64 `json:"purchase_price"`

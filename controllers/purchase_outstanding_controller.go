@@ -20,6 +20,7 @@ type purchaseOutstandingRow struct {
 	VendorID      int64          `json:"vendor_id"`
 	VendorCode    string         `json:"vendor_code"`
 	VendorName    string         `json:"vendor_name"`
+	ProductID     int64          `json:"product_id"`
 	ModelCode     string         `json:"model_code"`
 	ProductName   string         `json:"product_name"`
 	ExpectedDate  string         `json:"expected_date"`
@@ -225,6 +226,7 @@ func GetPurchaseOutstanding(c *gin.Context) {
 				VendorID:      vendorID,
 				VendorCode:    vendorCode,
 				VendorName:    vendorName,
+				ProductID:     item.ProductID,
 				ModelCode:     modelCode,
 				ProductName:   productName,
 				ExpectedDate:  item.ExpectedDate,

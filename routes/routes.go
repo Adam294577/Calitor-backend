@@ -187,6 +187,8 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.PUT("/purchases/:id", middlewares.RequirePermission("purchases.edit"), controllers.UpdatePurchase)
 		adminAuth.DELETE("/purchases/:id", middlewares.RequirePermission("purchases.delete"), controllers.DeletePurchase)
 		adminAuth.PUT("/purchases/:id/stop", middlewares.RequirePermission("purchases.edit"), controllers.StopPurchase)
+		// 逐列停交：body { product_ids: [...] }，給「採購未交統計」按停用
+		adminAuth.PUT("/purchases/:id/stop-items", middlewares.RequirePermission("purchases.edit"), controllers.StopPurchaseItems)
 			// 廠商跨單採購未交量 map（供 SizeQtyTable 顯示「採購未交量」）
 			adminAuth.GET("/vendors/:id/purchase-outstanding-map", middlewares.RequirePermission("purchases.view"), controllers.GetVendorPurchaseOutstandingMap)
 

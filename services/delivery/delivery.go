@@ -46,16 +46,14 @@ func UpdateDeliveryStatus(tx *gorm.DB, purchaseID int64) error {
 		Qty            int
 	}
 
-	// 檢查是否所有明細都已停交（cancel_flag >= 2），若是則視為已交齊
-	var totalItemCount int64
-	if err := tx.Model(&models.PurchaseItem{}).Where("purchase_id = ?", purchaseID).Count(&totalItemCount).Error; err != nil {
+	// 沒有未停明細(全部已停 / 整單無明細)→ 視為已交齊。
+	// 與下方 purchaseSizes query 用同一個 cancel_flag<2 filter,避免雙重 Count 比對
+	// (total vs stopped) 在 cancel_flag 為 NULL/0/3 等異常值時兩邊不等而誤判為「還有未停明細」。
+	var activeItemCount int64
+	if err := tx.Model(&models.PurchaseItem{}).Where("purchase_id = ? AND cancel_flag < 2", purchaseID).Count(&activeItemCount).Error; err != nil {
 		return err
 	}
-	var stoppedItemCount int64
-	if err := tx.Model(&models.PurchaseItem{}).Where("purchase_id = ? AND cancel_flag >= 2", purchaseID).Count(&stoppedItemCount).Error; err != nil {
-		return err
-	}
-	if totalItemCount > 0 && stoppedItemCount == totalItemCount {
+	if activeItemCount == 0 {
 		return tx.Model(&models.Purchase{}).Where("id = ?", purchaseID).Update("delivery_status", 2).Error
 	}
 
@@ -68,6 +66,7 @@ func UpdateDeliveryStatus(tx *gorm.DB, purchaseID int64) error {
 		Scan(&purchaseSizes)
 
 	if len(purchaseSizes) == 0 {
+		// 有未停明細但無任何尺碼 row(理論上不應發生)→ 視為未交
 		return tx.Model(&models.Purchase{}).Where("id = ?", purchaseID).Update("delivery_status", 0).Error
 	}
 
