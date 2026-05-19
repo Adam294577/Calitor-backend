@@ -445,6 +445,12 @@ func UpdateGather(c *gin.Context) {
 		return
 	}
 
+	var existing models.Gather
+	if err := db.GetRead().Where("id = ?", gatherID).First(&existing).Error; err != nil {
+		resp.Fail(http.StatusNotFound, "收款單不存在").Send()
+		return
+	}
+
 	var req gatherRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		resp.Fail(http.StatusBadRequest, "參數錯誤: "+err.Error()).Send()
@@ -456,6 +462,12 @@ func UpdateGather(c *gin.Context) {
 			resp.Fail(http.StatusBadRequest, ErrMsgCustomerNotVisible).Send()
 			return
 		}
+	}
+
+	adminId, _ := c.Get("AdminId")
+	recorderID := existing.RecorderID
+	if aid, ok := adminId.(float64); ok {
+		recorderID = int64(aid)
 	}
 
 	err := db.GetWrite().Transaction(func(tx *gorm.DB) error {
@@ -495,6 +507,7 @@ func UpdateGather(c *gin.Context) {
 			"actual_amount":       req.ActualAmount,
 			"prepaid_credit_used": req.PrepaidCreditUsed,
 			"gather_person_id":    req.GatherPersonID,
+			"recorder_id":         recorderID,
 			"open_bank":           req.OpenBank,
 			"bank_account_no":     req.BankAccountNo,
 			"start_brand_id":      req.StartBrandID,

@@ -565,8 +565,14 @@ func StopPurchase(c *gin.Context) {
 		return
 	}
 
+	adminId, _ := c.Get("AdminId")
+	recorderID := existing.RecorderID
+	if aid, ok := adminId.(float64); ok {
+		recorderID = int64(aid)
+	}
+
 	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
-		return purchase.Stop(tx, id)
+		return purchase.Stop(tx, id, recorderID)
 	})
 	if err != nil {
 		resp.Panic(err).Send()

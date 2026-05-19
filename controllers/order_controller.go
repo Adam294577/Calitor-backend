@@ -820,6 +820,12 @@ func StopOrder(c *gin.Context) {
 		return
 	}
 
+	adminId, _ := c.Get("AdminId")
+	recorderID := existing.RecorderID
+	if aid, ok := adminId.(float64); ok {
+		recorderID = int64(aid)
+	}
+
 	// 所有明細的 cancel_flag 設為 2 (停)，並更新交貨狀態
 	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&models.OrderItem{}).Where("order_id = ? AND cancel_flag < 2", id).Update("cancel_flag", 2).Error; err != nil {
@@ -827,6 +833,9 @@ func StopOrder(c *gin.Context) {
 		}
 		// 舊資料可能 cancel_flag=3，統一正規化為 2
 		if err := tx.Model(&models.OrderItem{}).Where("order_id = ? AND cancel_flag = 3", id).Update("cancel_flag", 2).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&models.Order{}).Where("id = ?", id).Update("recorder_id", recorderID).Error; err != nil {
 			return err
 		}
 		return UpdateOrderDeliveryStatus(tx, id)

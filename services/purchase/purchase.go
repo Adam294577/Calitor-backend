@@ -7,13 +7,17 @@ import (
 	"gorm.io/gorm"
 )
 
-// Stop 停交採購單：將未停交明細標記 cancel_flag=2、採購單標為 is_stopped，並重算 delivery 狀態。
-// 呼叫端必須傳入 Transaction 的 tx（避免部分寫入）。
-func Stop(tx *gorm.DB, purchaseID int64) error {
+// Stop 停交採購單：將未停交明細標記 cancel_flag=2、採購單標為 is_stopped、寫入異動人，並重算 delivery 狀態。
+// 呼叫端必須傳入 Transaction 的 tx（避免部分寫入）。recorderID 為 0 時不覆寫原值。
+func Stop(tx *gorm.DB, purchaseID int64, recorderID int64) error {
 	if err := tx.Model(&models.PurchaseItem{}).Where("purchase_id = ? AND cancel_flag < 2", purchaseID).Update("cancel_flag", 2).Error; err != nil {
 		return err
 	}
-	if err := tx.Model(&models.Purchase{}).Where("id = ?", purchaseID).Update("is_stopped", true).Error; err != nil {
+	updates := map[string]interface{}{"is_stopped": true}
+	if recorderID != 0 {
+		updates["recorder_id"] = recorderID
+	}
+	if err := tx.Model(&models.Purchase{}).Where("id = ?", purchaseID).Updates(updates).Error; err != nil {
 		return err
 	}
 	return delivery.UpdateDeliveryStatus(tx, purchaseID)

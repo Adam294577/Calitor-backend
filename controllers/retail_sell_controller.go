@@ -424,6 +424,12 @@ func UpdateRetailSell(c *gin.Context) {
 		newSellStore = customerPtr.Code
 	}
 
+	adminId, _ := c.Get("AdminId")
+	recorderID := existing.RecorderID
+	if aid, ok := adminId.(float64); ok {
+		recorderID = int64(aid)
+	}
+
 	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
 		// 還原舊庫存
 		var storeCustomerOld models.RetailCustomer
@@ -481,6 +487,7 @@ func UpdateRetailSell(c *gin.Context) {
 			"customer_id":    req.CustomerID,
 			"sell_store":     newSellStore,
 			"sell_person_id": req.SellPersonID,
+			"recorder_id":    recorderID,
 			"tax_rate":       req.TaxRate,
 			"tax_id":         req.TaxID,
 			"invoice_amount": req.InvoiceAmount,
