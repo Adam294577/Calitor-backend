@@ -744,12 +744,14 @@ func UpdateOrderDeliveryStatus(tx *gorm.DB, orderID int64) error {
 		SizeOptionID int64
 		Qty          int
 	}
-	// 檢查是否所有明細都已停貨（cancel_flag >= 2），若是則視為已交齊
-	var totalItemCount int64
-	tx.Model(&models.OrderItem{}).Where("order_id = ?", orderID).Count(&totalItemCount)
-	var stoppedItemCount int64
-	tx.Model(&models.OrderItem{}).Where("order_id = ? AND cancel_flag >= 2", orderID).Count(&stoppedItemCount)
-	if totalItemCount > 0 && stoppedItemCount == totalItemCount {
+	// 沒有未停明細(全部已停 / 整單無明細)→ 視為已交齊。
+	// 與下方 orderSizes query 用同一個 cancel_flag<2 filter,避免雙重 Count 比對 (total vs stopped)
+	// 在 cancel_flag 為 NULL/0/3 等異常值時兩邊不等而誤判為「還有未停明細」。
+	var activeItemCount int64
+	if err := tx.Model(&models.OrderItem{}).Where("order_id = ? AND cancel_flag < 2", orderID).Count(&activeItemCount).Error; err != nil {
+		return err
+	}
+	if activeItemCount == 0 {
 		return tx.Model(&models.Order{}).Where("id = ?", orderID).Update("delivery_status", 2).Error
 	}
 
@@ -762,6 +764,7 @@ func UpdateOrderDeliveryStatus(tx *gorm.DB, orderID int64) error {
 		Scan(&orderSizes)
 
 	if len(orderSizes) == 0 {
+		// 有未停明細但無任何尺碼 row(理論上不應發生)→ 視為未交
 		return tx.Model(&models.Order{}).Where("id = ?", orderID).Update("delivery_status", 0).Error
 	}
 
@@ -833,6 +836,65 @@ func StopOrder(c *gin.Context) {
 		}
 		// 舊資料可能 cancel_flag=3，統一正規化為 2
 		if err := tx.Model(&models.OrderItem{}).Where("order_id = ? AND cancel_flag = 3", id).Update("cancel_flag", 2).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&models.Order{}).Where("id = ?", id).Update("recorder_id", recorderID).Error; err != nil {
+			return err
+		}
+		return UpdateOrderDeliveryStatus(tx, id)
+	})
+	if err != nil {
+		resp.Panic(err).Send()
+		return
+	}
+
+	resp.Success("停貨成功").Send()
+}
+
+// StopOrderItems 逐列停貨：只將指定 product_ids 對應的明細 cancel_flag 設為 2
+// 與 StopOrder 不同：StopOrder 停整張訂單所有明細；本端點只停指定 product_id 的明細列。
+// 給「訂貨未交統計」按下停按鈕時使用，避免把訂單裡其他型號一起停掉。
+func StopOrderItems(c *gin.Context) {
+	resp := response.New(c)
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		resp.Fail(http.StatusBadRequest, "無效的 ID").Send()
+		return
+	}
+
+	var body struct {
+		ProductIDs []int64 `json:"product_ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		resp.Fail(http.StatusBadRequest, "請求格式錯誤").Send()
+		return
+	}
+	if len(body.ProductIDs) == 0 {
+		resp.Fail(http.StatusBadRequest, "必須指定 product_ids").Send()
+		return
+	}
+
+	db := models.PostgresNew()
+	defer db.Close()
+
+	var existing models.Order
+	if err := db.GetRead().Where("id = ?", id).First(&existing).Error; err != nil {
+		resp.Fail(http.StatusNotFound, "訂貨單不存在").Send()
+		return
+	}
+
+	adminId, _ := c.Get("AdminId")
+	recorderID := existing.RecorderID
+	if aid, ok := adminId.(float64); ok {
+		recorderID = int64(aid)
+	}
+
+	err = db.GetWrite().Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&models.OrderItem{}).Where("order_id = ? AND product_id IN ? AND cancel_flag < 2", id, body.ProductIDs).Update("cancel_flag", 2).Error; err != nil {
+			return err
+		}
+		// 舊資料可能 cancel_flag=3，統一正規化為 2
+		if err := tx.Model(&models.OrderItem{}).Where("order_id = ? AND product_id IN ? AND cancel_flag = 3", id, body.ProductIDs).Update("cancel_flag", 2).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&models.Order{}).Where("id = ?", id).Update("recorder_id", recorderID).Error; err != nil {

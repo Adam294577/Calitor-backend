@@ -222,6 +222,8 @@ func RouterRegister(route *gin.Engine) {
 		adminAuth.PUT("/orders/:id", middlewares.RequirePermission("orders.edit"), controllers.UpdateOrder)
 		adminAuth.DELETE("/orders/:id", middlewares.RequirePermission("orders.delete"), controllers.DeleteOrder)
 		adminAuth.PUT("/orders/:id/stop", middlewares.RequirePermission("orders.edit"), controllers.StopOrder)
+		// 逐列停貨：body { product_ids: [...] }，給「訂貨未交統計」按停用
+		adminAuth.PUT("/orders/:id/stop-items", middlewares.RequirePermission("orders.edit"), controllers.StopOrderItems)
 			// 客戶跨單訂貨未交量 map（供 SizeQtyTable 顯示「訂貨未交量」）
 			adminAuth.GET("/customers/:id/order-outstanding-map", middlewares.RequirePermission("orders.view"), controllers.GetCustomerOrderOutstandingMap)
 

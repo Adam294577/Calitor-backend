@@ -19,6 +19,7 @@ type orderOutstandingRow struct {
 	OrderDate     string         `json:"order_date"`
 	CustomerCode  string         `json:"customer_code"`
 	CustomerName  string         `json:"customer_name"`
+	ProductID     int64          `json:"product_id"`
 	ModelCode     string         `json:"model_code"`
 	BrandName     string         `json:"brand_name"`
 	ExpectedDate  string         `json:"expected_date"`
@@ -264,6 +265,7 @@ func GetOrderOutstanding(c *gin.Context) {
 				OrderDate:     order.OrderDate,
 				CustomerCode:  customerCode,
 				CustomerName:  customerName,
+				ProductID:     item.ProductID,
 				ModelCode:     modelCode,
 				BrandName:     brandName,
 				ExpectedDate:  item.ExpectedDate,
